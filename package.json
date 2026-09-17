@@ -1,0 +1,22 @@
+{
+  "name": "whatsapp1",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "个人 WhatsApp 号 AI 客服：WAHA(HTTP) 或 Baileys(直连) 两种传输，接任意 OpenAI 兼容 LLM",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env bot.mjs",
+    "start:baileys": "node --env-file-if-exists=.env bot-baileys.mjs",
+    "login": "node --env-file-if-exists=.env bot-baileys.mjs",
+    "selftest": "node lib.mjs --selftest",
+    "docker": "docker compose up -d --build",
+    "sim": "node --env-file-if-exists=.env sim.mjs"
+  },
+  "dependencies": {
+    "baileys": "^7.0.0-rc14",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
