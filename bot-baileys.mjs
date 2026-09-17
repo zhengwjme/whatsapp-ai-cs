@@ -1,5 +1,5 @@
 /**
- * 传输 B：Baileys 直连（**不需要 Docker / 不需要 WSL**，只要 Node ≥ 22.5）。
+ * 传输 B：Baileys 直连（**不需要 Docker / 不需要 WSL**，只要 Node ≥ 22.13）。
  * Windows 版本低装不了 Docker Desktop 时走这条。
  *
  * 装依赖：npm install
@@ -60,7 +60,7 @@ async function start() {
         || '';
       const msg = { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe };
       if (!shouldReply(msg)) continue;
-      handleIncoming(msg, {
+      void handleIncoming(msg, {   // 内部已兜住异常，不 await 也不会掀掉进程
         typing: () => sock.sendPresenceUpdate('composing', chat),
         stopTyping: () => sock.sendPresenceUpdate('paused', chat),
         send: text => sock.sendMessage(chat, { text }),

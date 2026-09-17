@@ -31,9 +31,11 @@ rl.on('line', line => {
   const body = line.trim();
   if (body === 'exit' || closed) return rl.close();
   if (!body) return rl.prompt();
-  chain = chain.then(async () => {
-    await handleIncoming({ id: `sim-${++n}`, chat, from: chat, body }, io);
-    if (!closed) rl.prompt();                        // stdin 已 EOF（管道输入）时不再 prompt
-  });
-  chain.catch(e => console.error('[sim]', e.message));
+  chain = chain
+    .then(async () => {
+      // id 必须带上 chat（每轮唯一）：去重表是全库的，id 复用会让第二次运行整条静默
+      await handleIncoming({ id: `${chat}#${++n}`, chat, from: chat, body }, io);
+      if (!closed) rl.prompt();                      // stdin 已 EOF（管道输入）时不再 prompt
+    })
+    .catch(e => console.error('[sim]', e.message));  // 必须回写 chain：否则一次出错整条链作废，之后输入全被吞
 });

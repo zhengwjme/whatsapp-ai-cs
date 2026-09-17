@@ -21,12 +21,14 @@ services:
       WAHA_URL: http://waha:3000
       WAHA_API_KEY: ${WHATSAPP_API_KEY:-change-me}
       WAHA_SESSION: default
+      WAHA_TIMEOUT_MS: ${WAHA_TIMEOUT_MS:-15000}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.deepseek.com/v1}
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-chat}
+      LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-30000}
       SYSTEM_PROMPT: ${SYSTEM_PROMPT:-你是外贸客服助手，简洁专业，先答问题再问需求。不确定的不要编，说转人工。}
       REPLY_GROUPS: "false"
-      PAUSE_KEYWORD: 人工,human,转人工
+      PAUSE_KEYWORD: 人工,转人工,human agent,real person
       PAUSE_HOURS: "12"
 volumes:
   waha-sessions:

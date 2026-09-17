@@ -17,6 +17,7 @@ async function waha(path, body) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Api-Key': WAHA.key },
     body: JSON.stringify({ session: WAHA.session, ...body }),
+    signal: AbortSignal.timeout(CFG.wahaTimeout),   // WAHA 半死时，别把该客户的会话链永久卡住
   });
   if (!r.ok) throw new Error(`WAHA ${path} ${r.status} ${await r.text()}`);
   return r.status === 204 ? null : r.json().catch(() => null);
@@ -26,7 +27,7 @@ const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/health')) return res.writeHead(200).end('ok');  // 容器健康检查
   if (req.method !== 'POST' || !req.url.startsWith('/webhook')) return res.writeHead(404).end();
   let raw = '';
-  req.on('data', c => { raw += c; });
+  req.on('data', c => { if (raw.length < 1e6) raw += c; });   // 只监听本机，仍给个体积上限
   req.on('end', () => {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}'); // 立即 200，WAHA 才不重试
     try {
