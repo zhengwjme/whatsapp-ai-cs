@@ -102,16 +102,28 @@ const roles = chat => historyOf(chat, 20).map(m => m.role).join(',');
   mode = 'ok';
 }
 
-/* 5) 转人工 + io.send 抛错：不能掀掉进程，此后该会话只记不答 */
+/* 5) 转人工：话术发成功才静默；发失败不能把客户晾着 */
 {
-  const io = makeIo(); const chat = 'c5@s.whatsapp.net';
-  io.send = async () => { throw new Error('WAHA /api/sendText 500'); };
-  await handleIncoming({ id: '5', chat, from: chat, body: '我要转人工' }, io);
-  ok(pauseUntil(chat) > Date.now(), '应已暂停该会话');
+  // 5a) 话术发不出去 → 不静默，下一条照常回（否则客户既没收到话术、又被晾 12 小时）
+  const chat = 'c5@s.whatsapp.net';
+  const bad = makeIo();
+  bad.send = async () => { throw new Error('WAHA /api/sendText 500'); };
+  await handleIncoming({ id: '5', chat, from: chat, body: '我要转人工' }, bad);
+  eq(pauseUntil(chat), 0, '话术没发出去就不该静默');
   const io2 = makeIo();
   await handleIncoming({ id: '6', chat, from: chat, body: '在吗' }, io2);
-  eq(io2.sent.length, 0, '暂停期内不回');
-  eq(roles(chat), 'user,user', '暂停期内只记录');
+  eq(io2.sent.join('|'), 'echo:在吗', '没静默，下一条要照常回');
+
+  // 5b) 话术发成功 → 暂停，之后只记不答
+  const chat2 = 'c5b@s.whatsapp.net';
+  const io3 = makeIo();
+  await handleIncoming({ id: '7', chat: chat2, from: chat2, body: '我要转人工' }, io3);
+  eq(io3.sent.length, 1, '应回一句转接话术');
+  ok(pauseUntil(chat2) > Date.now(), '话术发成功才暂停');
+  const io4 = makeIo();
+  await handleIncoming({ id: '8', chat: chat2, from: chat2, body: '在吗' }, io4);
+  eq(io4.sent.length, 0, '暂停期内不回');
+  eq(roles(chat2), 'user,user', '暂停期内只记录');
 }
 
 /* 6) 关键词：正常咨询不能被当成「找人工」（外贸里 "human hair" 是高频词） */

@@ -23,11 +23,18 @@ async function waha(path, body) {
   return r.status === 204 ? null : r.json().catch(() => null);
 }
 
+const MAX_BODY = 1e6;                                         // WAHA 的真实载荷是几 KB，给个上限防打爆内存
+
 const server = createServer((req, res) => {
-  if (req.method === 'GET' && req.url.startsWith('/health')) return res.writeHead(200).end('ok');  // 容器健康检查
-  if (req.method !== 'POST' || !req.url.startsWith('/webhook')) return res.writeHead(404).end();
+  const path = (req.url || '').split('?')[0];
+  if (req.method === 'GET' && path === '/health') return res.writeHead(200).end('ok');   // 容器健康检查，只认精确路径
+  if (req.method !== 'POST' || path !== '/webhook') return res.writeHead(404).end();
+  if (+(req.headers['content-length'] || 0) > MAX_BODY) {     // 有长度就硬拒，别默默截断（截断后必然 JSON 解析失败）
+    res.writeHead(413).end();
+    return req.destroy();
+  }
   let raw = '';
-  req.on('data', c => { if (raw.length < 1e6) raw += c; });   // 只监听本机，仍给个体积上限
+  req.on('data', c => { if (raw.length < MAX_BODY) raw += c; });   // 分块上传没有 content-length，兜底截断
   req.on('end', () => {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}'); // 立即 200，WAHA 才不重试
     try {
@@ -48,4 +55,5 @@ const server = createServer((req, res) => {
 });
 
 if (process.argv.includes('--selftest')) selftest();
-else server.listen(WAHA.port, () => console.log(`bot(WAHA) on :${WAHA.port} -> ${WAHA.url} (${CFG.model})`));
+// PORT=0 时由系统分配，日志里打真实端口（e2e-waha.mjs 就靠这行拿端口）
+else server.listen(WAHA.port, () => console.log(`bot(WAHA) on :${server.address().port} -> ${WAHA.url} (${CFG.model})`));

@@ -81,7 +81,7 @@ flowchart TD
 ### 五、转人工：运营必须知道的 3 条
 
 1. **触发**：客户消息里出现默认关键词（`人工` / `转人工` / `human agent` / `real person`，任意位置命中即可）→ 机器人回一句转接话术，该客户**暂停 12 小时**。
-2. **暂停期间机器人只记录、不回话**（消息照旧存进历史）。这 12 小时里客户靠**你**回。
+2. **暂停期间机器人只记录、不回话**（消息照旧存进历史）。这 12 小时里客户靠**你**回。转接话术**没发出去就不会静默**（避免客户既没收到话术、又被晾 12 小时）。
 3. **想改时长**：`.env` 里的 `PAUSE_HOURS`。想让某个客户**立刻**恢复自动回复，需要技术删 `data/bot.db` 里 `pause` 表对应那一行。
 
 > 关键词表是 `.env` 的 `PAUSE_KEYWORD`（子串匹配、不分大小写），默认 `人工,转人工,human agent,real person`。**只加词组，别加裸词**：单独一个 `human` 会把「human hair」（真人发丝）这类正常咨询也判成要人工，那客户会被静默 12 小时。
@@ -177,6 +177,7 @@ curl http://localhost:8787/health        # 应输出 ok
 | `PAUSE_HOURS` | | 转人工后暂停多久，默认 12 |
 | `HISTORY_TURNS` | | 带最近几条消息，默认 12（一问一答算 2 条） |
 | `LLM_TIMEOUT_MS` | | 单次模型调用超时，默认 30000 毫秒；超时按失败处理，不会把客户一直晾着 |
+| `DEBUG` | | 设 `1` 时失败日志带调用栈，默认关 |
 | `REPLY_GROUPS` | | 群聊是否也回，默认 false |
 | `HANDOFF_TEXT` | | 转人工时的回话 |
 | `DATA_DIR` | | 默认 `./data`，容器里是 `/data` |
@@ -204,6 +205,7 @@ OPENAI_API_KEY=ollama
 | `npm run sim` | 假客户模拟器：终端里跑完「判定→上下文→LLM→回发」，不用手机 |
 | `npm run selftest` | 纯逻辑自检（过滤 / 关键词边界 / 延迟 / 环境变量兜底 / 上下文顺序） |
 | `npm run e2e` | 离线端到端自检：起假 LLM，不联网不花钱（并发串行 · 超时 · 失败不崩 · 转人工） |
+| `npm run e2e:waha` | WAHA 传输层自检：假 WAHA + 假 LLM 起真的 `bot.mjs`（路由 · 413 · 失败不崩） |
 | `npm run login` / `npm run start:baileys` | 扫码登录 / 启动（Baileys 直连） |
 | `npm start` | 启动 WAHA 传输（需 Docker） |
 | `npm run docker` | `docker compose up -d --build` |
@@ -235,6 +237,7 @@ OPENAI_API_KEY=ollama
 |---|---|---|
 | 逻辑自检 | `npm run selftest` | 输出 `selftest OK` |
 | 端到端（离线） | `npm run e2e` | 输出 `e2e OK` |
+| WAHA 传输层 | `npm run e2e:waha` | 输出 `e2e-waha OK` |
 | 模型通不通 | `npm run sim` 问一句 | 回答专业、不编造 |
 | 上下文生效 | sim 里连问两句相关的 | 第二句能接上第一句 |
 | 转人工 | sim 里打「人工」 | 回转人工话术，之后不再自动回 |
@@ -284,7 +287,7 @@ OPENAI_API_KEY=ollama
 
 ## 实测状态
 
-**已验证**：`npm run selftest` 通过；`npm run e2e` 通过（假 LLM 离线跑：同客户并发串行且历史严格「先问后答」、重复 id 不重发、LLM 500 与超时都不发送也不崩、转人工后只记不答）；WAHA 传输层回归（假 WAHA 起真的 `bot.mjs`：`/health` 200、webhook 立即 200、正常回发、`sendText` 500 时进程不退出且记 `[reply failed]`）；`npm run sim` 端到端跑通（多轮上下文累积、转人工生效且不再调用模型、之后只记录不回复、进程干净退出）；Baileys 通道真连上 WhatsApp（二维码出图、配对码返回真实 8 位码）；WAHA 通道容器化复测（`/health` 200、webhook 立即 200、同 id 只回一次、`healthy`）。
+**已验证**：`npm run selftest` 通过；`npm run e2e` 通过（假 LLM 离线跑：同客户并发串行且历史严格「先问后答」、重复 id 不重发、LLM 500 与超时都不发送也不崩、转人工后只记不答）；`npm run e2e:waha` 通过（假 WAHA 起真的 `bot.mjs`：`/health` 精确匹配、webhook 立即 200、正常回发、2MB body 413、`sendText` 500 时进程不退出且记 `[reply failed]`）；`npm run sim` 端到端跑通（多轮上下文累积、转人工生效且不再调用模型、之后只记录不回复、进程干净退出）；Baileys 通道真连上 WhatsApp（二维码出图、配对码返回真实 8 位码）；WAHA 通道容器化复测（`/health` 200、webhook 立即 200、同 id 只回一次、`healthy`）。
 
 **未验证**：低版本 Windows 本机、真实扫码后的双向收发、你实际选用的模型回答质量、本地 Ollama 路径。
 

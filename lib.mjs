@@ -29,6 +29,7 @@ export const CFG = {
   llmTimeout: num(process.env.LLM_TIMEOUT_MS, 30000),
   handoffText: process.env.HANDOFF_TEXT || '已为您转接人工，稍后回复您。',
   wahaTimeout: num(process.env.WAHA_TIMEOUT_MS, 15000),   // 仅 WAHA 传输用：HTTP 调用超时
+  debug: process.env.DEBUG === '1',                       // 失败日志带调用栈
   phone: process.env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
 };
 
@@ -110,6 +111,8 @@ export async function askLLM(chat) {
 
 /* ---------- 主流程（传输无关） ---------- */
 const chains = new Map();   // 同客户串行：连发两条时，第二条必须看到第一条的上下文
+// ponytail: 队列不设上限——同客户连发 N 条时，最后一条最坏等 N×(LLM 超时 + 6s)。要限流就按 chat 记深度并合并，
+// 现在不做：丢客户消息比排队更糟
 
 async function run(msg, io) {
   const chat = msg.chat;
@@ -117,9 +120,10 @@ async function run(msg, io) {
   if (pauseUntil(chat) > Date.now()) return saveMsg(chat, 'user', msg.body);   // 已转人工，只记不答
 
   if (wantsHuman(msg.body)) {
-    setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
     saveMsg(chat, 'user', msg.body);
-    return io.send(CFG.handoffText);
+    await io.send(CFG.handoffText);                    // 话术先发出去：发失败就别静默，客户下一条还有机会被回
+    setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
+    return;
   }
 
   saveMsg(chat, 'user', msg.body);                     // 先落库：LLM 挂掉也不丢客户这句话
@@ -143,7 +147,7 @@ export function handleIncoming(msg, io) {
   const prev = chains.get(msg.chat) || Promise.resolve();
   const p = prev
     .then(() => run(msg, io))
-    .catch(e => console.error('[reply failed]', msg.chat, e.message));
+    .catch(e => console.error('[reply failed]', msg.chat, CFG.debug ? (e.stack || e.message) : e.message));
   chains.set(msg.chat, p);
   p.then(() => { if (chains.get(msg.chat) === p) chains.delete(msg.chat); });   // 防 map 涨
   return p;
