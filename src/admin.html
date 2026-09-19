@@ -84,7 +84,10 @@ function render() {
   list.replaceChildren(...(chats.length ? chats.map(c => {
     const li = el('li', c.chat === openChat ? 'sel' : '');
     const top = el('div', 'row');
-    top.append(el('span', 'phone', phone(c.chat)), el('span', 'muted', time(c.ts)));
+    const who = el('span');
+    who.append(el('span', 'phone', phone(c.chat)));
+    if (c.name) who.append(' ', el('span', 'muted', c.name));
+    top.append(who, el('span', 'muted', time(c.ts)));
     li.append(top, el('div', 'last', c.last), el('div', handoff(c.until) ? 'hand' : 'muted', handoff(c.until) || t('bot')));
     li.onclick = () => select(c.chat);
     return li;

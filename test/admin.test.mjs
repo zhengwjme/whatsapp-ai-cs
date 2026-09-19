@@ -1,12 +1,20 @@
 /**
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
- * 覆盖：只绑本机 · 连接状态透传 · 会话列表 · 历史分页与三方角色 · 未知 API · 端口占用
+ * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 未知 API · 端口占用
  */
-import { rmSync } from 'node:fs';
+import { rmSync, mkdirSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
 import { strictEqual as eq, ok, deepStrictEqual as deq, rejects } from 'node:assert';
 
 process.env.DATA_DIR = './data/test-admin';
 rmSync('./data/test-admin', { recursive: true, force: true });
+{ // 旧库：只有旧表和旧数据，启动时要自动补上昵称表
+  mkdirSync('./data/test-admin', { recursive: true });
+  const old = new DatabaseSync('./data/test-admin/bot.db');
+  old.exec(`CREATE TABLE msg(chat_id TEXT, role TEXT, content TEXT, ts INTEGER);
+    INSERT INTO msg VALUES('old@s.whatsapp.net', 'user', 'from before', ${Date.now()});`);
+  old.close();
+}
 const { handleIncoming, saveMsg, setPause } = await import('../src/lib.mjs');
 const { startAdmin } = await import('../src/admin.mjs');
 
@@ -35,12 +43,26 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
 {
   const { status, body } = await api('/api/chats');
   eq(status, 200);
-  deq(body.map(c => c.chat), [a, b], 'newest last message first');
+  deq(body.map(c => c.chat), [a, b, 'old@s.whatsapp.net'], 'newest last message first');
   ok(body[0].last.length < 500, 'last message is a summary');
   eq(body[0].until, 0, 'a is not in a handoff window');
   eq(body[1].last, 'operator here');
   ok(body[1].until > Date.now(), 'b is in a handoff window');
   ok(body[1].ts > 0 && body[0].ts >= body[1].ts, 'last message time');
+  eq(body.at(-1).chat, 'old@s.whatsapp.net', 'old database still listed');
+  eq(body.at(-1).name, '', 'no name yet: empty field');
+}
+
+/* 客户昵称：只取客户消息的 pushName，改名后显示新昵称，运营消息不覆盖 */
+{
+  const d = 'd@s.whatsapp.net';
+  const nameOf = async () => (await api('/api/chats')).body.find(c => c.chat === d)?.name;
+  await handleIncoming({ id: 'd-1', chat: d, from: d, body: '', media: 'image', name: 'Jane' }, io);
+  eq(await nameOf(), 'Jane', 'name from customer message');
+  await handleIncoming({ id: 'd-2', chat: d, from: d, body: 'still me', name: 'Jane Smith' }, io);   // 转人工期内也更新
+  eq(await nameOf(), 'Jane Smith', 'renamed customer shows the new name');
+  await handleIncoming({ id: 'd-3', chat: d, from: d, body: 'op', fromMe: true }, io);
+  eq(await nameOf(), 'Jane Smith', 'operator message keeps the customer name');
 }
 
 /* 历史：倒序分页、游标、默认 200 条、三方角色、非文字占位 */

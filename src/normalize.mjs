@@ -16,5 +16,6 @@ export function normalize(m) {
     : mm.videoMessage || mm.ptvMessage ? 'video'
     : mm.documentMessage || mm.documentWithCaptionMessage ? 'file'
     : undefined;
-  return { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe, media };
+  const name = m.key.fromMe ? undefined : m.pushName || undefined;   // 客户的 WhatsApp 昵称；运营消息的 pushName 是本号自己
+  return { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe, media, name };
 }

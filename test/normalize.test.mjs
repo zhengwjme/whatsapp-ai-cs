@@ -8,7 +8,7 @@ rmSync('./data/test-normalize', { recursive: true, force: true });
 const { shouldReply } = await import('../src/lib.mjs');
 
 const C = '8613@s.whatsapp.net';
-const raw = (message, fromMe = false) => ({ key: { id: 'X1', remoteJid: C, fromMe }, message });
+const raw = (message, fromMe = false, pushName) => ({ key: { id: 'X1', remoteJid: C, fromMe }, message, pushName });
 eq(JSON.stringify(normalize(raw({ conversation: 'hi' }))),
   JSON.stringify({ id: 'X1', chat: C, from: C, body: 'hi', fromMe: false }), 'text message');
 eq(normalize(raw({ audioMessage: { ptt: true } })).media, 'voice', 'voice');
@@ -23,3 +23,5 @@ eq(shouldReply(normalize(raw({ stickerMessage: {} }))), false, 'sticker dropped'
 eq(shouldReply(normalize(raw({ reactionMessage: { text: '👍' } }))), false, 'reaction dropped');
 eq(shouldReply(normalize(raw({ conversation: 'on it, I will take over' }, true))), true, 'operator message passed to core');
 eq(normalize(raw({ conversation: 'on it, I will take over' }, true)).fromMe, true, 'keeps fromMe');
+eq(normalize(raw({ conversation: 'hi' }, false, 'Jane Smith')).name, 'Jane Smith', 'customer message carries pushName');
+eq(normalize(raw({ conversation: 'on it' }, true, 'Shop Owner')).name, undefined, 'operator message carries no name');

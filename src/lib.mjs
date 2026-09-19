@@ -78,6 +78,7 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS msg(chat_id TEXT, role TEXT, content TEXT, ts INTEGER);
   CREATE TABLE IF NOT EXISTS pause(chat_id TEXT PRIMARY KEY, until INTEGER);
   CREATE TABLE IF NOT EXISTS sent(id TEXT PRIMARY KEY, ts INTEGER);      -- 机器人发过的消息 id：回显不能当成运营接管，落库防重启后误判
+  CREATE TABLE IF NOT EXISTS name(chat_id TEXT PRIMARY KEY, name TEXT);  -- 客户最近一次的 WhatsApp 昵称，管理界面用
   CREATE INDEX IF NOT EXISTS idx_msg ON msg(chat_id);                    -- 别让 historyOf 全表扫
 `);
 // 表会一直长，启动时滚一刀。ponytail: 固定保留期，要长期留档就先导出再删
@@ -95,11 +96,14 @@ export const saveMsg = (chat, role, content) =>
 /** 最近 n 条。按 rowid（插入顺序）取，不能按 ts：一问一答常落在同一毫秒，ts 排序会把回答排到提问前面 */
 export const historyOf = (chat, n) =>
   db.prepare('SELECT role, content FROM msg WHERE chat_id=? ORDER BY rowid DESC LIMIT ?').all(chat, n).reverse();
-/** 管理界面的会话列表：每个会话最后一条消息的摘要和时间、转人工期到期时间，最新的在前 */
+const saveName = (chat, name) =>
+  db.prepare('INSERT INTO name(chat_id, name) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET name=excluded.name').run(chat, name);
+/** 管理界面的会话列表：每个会话最后一条消息的摘要和时间、客户昵称（没有为空串）、转人工期到期时间，最新的在前 */
 export const listChats = () => db.prepare(`
-  SELECT m.chat_id AS chat, substr(m.content, 1, 120) AS last, m.ts, COALESCE(p.until, 0) AS until
+  SELECT m.chat_id AS chat, COALESCE(n.name, '') AS name, substr(m.content, 1, 120) AS last, m.ts, COALESCE(p.until, 0) AS until
   FROM msg m JOIN (SELECT MAX(rowid) AS r FROM msg GROUP BY chat_id) l ON m.rowid = l.r
   LEFT JOIN pause p ON p.chat_id = m.chat_id
+  LEFT JOIN name n ON n.chat_id = m.chat_id
   ORDER BY m.rowid DESC`).all();
 /** 管理界面的历史分页：按插入顺序倒序，before 是上一页最后一条的 id */
 export const historyPage = (chat, before = Number.MAX_SAFE_INTEGER, limit = 200) =>
@@ -172,6 +176,7 @@ async function run(msg, io) {
     saveMsg(chat, 'operator', content);
     return openHandoff(chat);
   }
+  if (msg.name) saveName(chat, msg.name);              // 客户可能改过昵称，每条都更新
   if (pauseUntil(chat) > Date.now()) {                 // 已转人工，只记不答
     saveMsg(chat, 'user', content);
     if (wantsHuman(msg.body)) openHandoff(chat);       // 再次要求人工：重新计满，话术已发过不再发
@@ -205,8 +210,8 @@ async function run(msg, io) {
 }
 
 /**
- * @param msg {{id: string, chat: string, from: string, body: string, fromMe?: boolean, media?: 'voice'|'image'|'video'|'file'}}
- *   media 只给无说明的非文字消息；带说明的图片/视频由传输层把说明放进 body、不带 media
+ * @param msg {{id: string, chat: string, from: string, body: string, fromMe?: boolean, media?: 'voice'|'image'|'video'|'file', name?: string}}
+ *   media 只给无说明的非文字消息；带说明的图片/视频由传输层把说明放进 body、不带 media；name 是客户的 WhatsApp 昵称
  * @param io  {{send(text): Promise<string|undefined>, typing(): Promise, stopTyping?(): Promise}}
  *   send 要返回所发消息的 id：本号消息的回显靠它和运营发言区分
  * @returns {Promise<void>} 永不 reject（调用方漏 await 也不会掀掉进程）
