@@ -129,13 +129,20 @@ const chains = new Map();   // 同客户串行：连发两条时，第二条必�
 async function handoff(chat, io) {
   await io.send(CFG.handoffText);
   saveMsg(chat, 'assistant', CFG.handoffText);
-  setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
+  openHandoff(chat);
 }
+
+/** 开启或重新计满转人工期：到期时间总是「此刻 + 时长」 */
+const openHandoff = chat => setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
 
 async function run(msg, io) {
   const chat = msg.chat;
   if (alreadySeen(msg.id)) return;                     // 幂等
-  if (pauseUntil(chat) > Date.now()) return saveMsg(chat, 'user', msg.body);   // 已转人工，只记不答
+  if (pauseUntil(chat) > Date.now()) {                 // 已转人工，只记不答
+    saveMsg(chat, 'user', msg.body);
+    if (wantsHuman(msg.body)) openHandoff(chat);       // 再次要求人工：重新计满，话术已发过不再发
+    return;
+  }
 
   if (wantsHuman(msg.body)) {
     saveMsg(chat, 'user', msg.body);

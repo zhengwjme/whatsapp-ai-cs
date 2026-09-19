@@ -35,7 +35,7 @@ const llm = createServer((req, res) => {
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
 process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
 
-const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, wantsHuman } = await import('./lib.mjs');
+const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman } = await import('./lib.mjs');
 eq(CFG.baseUrl, process.env.OPENAI_BASE_URL);
 
 const makeIo = () => {
@@ -167,6 +167,19 @@ const handedOff = (chat, io, what) => {
   await handleIncoming({ id: '8', chat: chat2, from: chat2, body: '在吗' }, io4);
   eq(io4.sent.length, 0, '暂停期内不回');
   eq(roles(chat2), 'user,assistant,user', '转人工期内只记录');
+
+  // 5c) 转人工期内：未命中关键词不动窗口；再次要求人工则从此刻重新计满，且不重发话术、不回复
+  const soon = Date.now() + 60e3;                         // 模拟快到期
+  setPause(chat2, soon);
+  const io5 = makeIo();
+  await handleIncoming({ id: '9', chat: chat2, from: chat2, body: '还在吗' }, io5);
+  eq(pauseUntil(chat2), soon, '未命中关键词不改变转人工期');
+  const t0 = Date.now();
+  await handleIncoming({ id: '10', chat: chat2, from: chat2, body: '快给我转人工' }, io5);
+  const until = pauseUntil(chat2);
+  ok(until >= t0 + 3600e3 && until <= Date.now() + 3600e3, `再次要求人工应重新计满，实际剩 ${until - Date.now()}ms`);
+  eq(io5.sent.length, 0, '转人工期内再次要求人工：不重发话术、不回复');
+  eq(roles(chat2), 'user,assistant,user,user,user', '转人工期内消息都只记录');
 }
 
 /* 6) 关键词：正常咨询不能被当成「找人工」（外贸里 "human hair" 是高频词） */
