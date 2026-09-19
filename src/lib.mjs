@@ -227,11 +227,31 @@ async function run(msg, io) {
  * @returns {Promise<void>} 永不 reject（调用方漏 await 也不会掀掉进程）
  */
 export function handleIncoming(msg, io) {
-  const prev = chains.get(msg.chat) || Promise.resolve();
-  const p = prev
-    .then(() => run(msg, io))
+  return enqueue(msg.chat, () => run(msg, io))
     .catch(e => console.error('[reply failed]', msg.chat, CFG.debug ? (e.stack || e.message) : e.message));
-  chains.set(msg.chat, p);
-  p.then(() => { if (chains.get(msg.chat) === p) chains.delete(msg.chat); });   // 防 map 涨
-  return p;
+}
+
+/**
+ * 运营发送（管理界面里回复客户）：经传输层发出 → 记下发送 id（回显不再当运营接管）→ 以运营身份入历史 → 开启或重新计满转人工期。
+ * 与客户消息同一条队列，保证顺序。发送失败就抛出：不写历史、不开窗口
+ * @param send {(text: string) => Promise<string|undefined>} 以本号身份给该会话发文字，返回消息 id
+ * @returns {Promise<number>} 转人工期到期时刻
+ */
+export function operatorSend(chat, text, send) {
+  return enqueue(chat, async () => {
+    const id = await send(text);
+    if (id) markSent(id);
+    else console.warn('[send] transport returned no message id; its echo will be logged again as an operator message', chat);
+    saveMsg(chat, 'operator', text);
+    return openHandoff(chat);
+  });
+}
+
+/** 排进该会话的队列；返回的 promise 带着 fn 的结果或异常，队列本身不会因异常断掉 */
+function enqueue(chat, fn) {
+  const result = (chains.get(chat) || Promise.resolve()).then(fn);   // 给调用方：带着异常
+  const settled = result.catch(() => {});                             // 给队列：吞掉异常，后面的照常跑
+  chains.set(chat, settled);
+  settled.then(() => { if (chains.get(chat) === settled) chains.delete(chat); });   // 防 map 涨
+  return result;
 }

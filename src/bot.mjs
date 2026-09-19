@@ -15,6 +15,7 @@ import { startAdmin } from './admin.mjs';
 const AUTH_DIR = join(CFG.dataDir, 'baileys-auth');
 let pairingRequested = false;
 let conn = { state: 'connecting' };   // 连接适配器的当前状态：connecting | open | qr（附 qr 原始串）| loggedOut
+let current;                          // 当前这条连接的 socket：重连后换新，管理界面发消息用它
 
 // 静音 Baileys 的内置 pino 日志，终端只留我们自己的输出（老 Windows 控制台更友好）
 const quiet = new Proxy({}, { get: () => () => quiet });
@@ -26,6 +27,7 @@ async function start() {
     version, auth: state, printQRInTerminal: false, markOnlineOnConnect: false, logger: quiet,
   });
 
+  current = sock;
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
@@ -73,7 +75,11 @@ async function start() {
 start().catch(e => { console.error('Failed to start:', e); process.exit(1); });
 
 // 管理界面起不来不影响机器人收发消息
-startAdmin({ port: CFG.adminPort, conn: { status: () => conn } }).then(() => {
+const adapter = {
+  status: () => conn,
+  send: async (chat, text) => (await current.sendMessage(chat, { text }))?.key?.id,   // 运营在管理界面回复客户
+};
+startAdmin({ port: CFG.adminPort, conn: adapter }).then(() => {
   const url = `http://127.0.0.1:${CFG.adminPort}`;
   console.log(`Admin page: ${url}`);
   const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;

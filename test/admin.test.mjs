@@ -1,6 +1,6 @@
 /**
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
- * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 未知 API · 端口占用
+ * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 未知 API · 端口占用
  */
 import { createServer } from 'node:http';
 import { rmSync, mkdirSync } from 'node:fs';
@@ -49,14 +49,24 @@ const { CFG, handleIncoming, saveMsg, setPause, pauseUntil, historyOf } = await 
 const { startAdmin } = await import('../src/admin.mjs');
 
 let conn = { state: 'connecting' };
-const server = await startAdmin({ port: 0, conn: { status: () => conn } });
+const outbox = [];                                        // 假适配器经 WhatsApp 发出的消息
+let sendFails = false;
+const adapter = {
+  status: () => conn,
+  send: async (chat, text) => {
+    if (sendFails) throw new Error('send 500');
+    outbox.push({ chat, text });
+    return `op-${outbox.length}`;
+  },
+};
+const server = await startAdmin({ port: 0, conn: adapter });
 const { address, port } = server.address();
 eq(address, '127.0.0.1', 'admin must only listen on localhost');
-const api = async (path, method = 'GET') => {
-  const r = await fetch(`http://127.0.0.1:${port}${path}`, { method });
+const api = async (path, method = 'GET', body) => {
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, { method, body: body && JSON.stringify(body) });
   return { status: r.status, body: await r.json() };
 };
-const chatApi = (chat, action) => api(`/api/chats/${encodeURIComponent(chat)}/${action}`, 'POST');
+const chatApi = (chat, action, body) => api(`/api/chats/${encodeURIComponent(chat)}/${action}`, 'POST', body);
 const untilIn = async chat => (await api('/api/chats')).body.find(c => c.chat === chat)?.until;
 
 /* 连接状态：如实透传适配器 */
@@ -170,6 +180,57 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
   ok(pauseUntil(f) > Date.now());
 }
 
+/* 运营发送：经适配器发出 → 以运营身份记一次 → 开启转人工期；回显不重复；失败/空白/未连接都拒绝 */
+{
+  const g = 'g@s.whatsapp.net', io = makeIo();
+  await handleIncoming({ id: 'g-1', chat: g, from: g, body: 'Qg' }, io);
+  const roles = () => historyOf(g, 20).map(m => m.role).join(',');
+
+  conn = { state: 'connecting' };
+  const off = await chatApi(g, 'send', { text: 'hello' });
+  ok(off.status >= 400 && /not connected/i.test(off.body.error), 'refused while WhatsApp is not connected');
+  conn = { state: 'open' };
+
+  for (const text of ['', '   \n ', undefined]) {
+    const r = await chatApi(g, 'send', { text });
+    ok(r.status >= 400 && r.body.field === 'text', `blank text refused: ${JSON.stringify(text)}`);
+  }
+  eq(outbox.length, 0, 'nothing sent when refused');
+
+  sendFails = true;
+  const failed = await chatApi(g, 'send', { text: 'will fail' });
+  ok(failed.status >= 400 && failed.body.error, 'adapter failure is an error');
+  eq(roles(), 'user,assistant', 'failed send writes no history');
+  eq(pauseUntil(g), 0, 'failed send opens no window');
+  sendFails = false;
+
+  const r = await chatApi(g, 'send', { text: 'Hi, Sam here £5 off' });
+  eq(r.status, 200);
+  deq(outbox.at(-1), { chat: g, text: 'Hi, Sam here £5 off' }, 'sent through the adapter');
+  deq({ ...historyOf(g, 1)[0] }, { role: 'operator', content: 'Hi, Sam here £5 off' }, 'logged as operator');
+  ok(pauseUntil(g) > Date.now(), 'counts as operator takeover');
+
+  await handleIncoming({ id: `op-${outbox.length}`, chat: g, from: g, body: 'Hi, Sam here £5 off', fromMe: true }, io);   // 回显
+  eq(roles(), 'user,assistant,operator', 'echo is not logged again');
+
+  await handleIncoming({ id: 'g-phone', chat: g, from: g, body: 'from my phone', fromMe: true }, io);   // 手机上回复照旧
+  eq(roles(), 'user,assistant,operator,operator', 'phone reply still logged as operator');
+  eq(io.sent.length, 1, 'bot stays quiet');
+
+  // 与客户消息同一条队列：机器人正在回复时运营发送，排在这条回复之后
+  const k = 'k@s.whatsapp.net', io2 = makeIo();
+  const h = holdLlm();
+  const p = handleIncoming({ id: 'k-1', chat: k, from: k, body: 'Qk' }, io2);
+  await h.arrived;
+  const sending = chatApi(k, 'send', { text: 'op after bot' });
+  await new Promise(r => setTimeout(r, 50));
+  eq(outbox.at(-1).text, 'Hi, Sam here £5 off', 'operator send waits for the queued bot reply');
+  h.release();
+  await p;
+  eq((await sending).status, 200);
+  eq(historyOf(k, 20).map(m => `${m.role}:${m.content}`).join('|'), 'user:Qk|assistant:echo:Qk|operator:op after bot', 'queue order kept');
+}
+
 /* 未知 API：非 2xx + { error } */
 {
   const { status, body } = await api('/api/nope');
@@ -186,7 +247,7 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
 }
 
 /* 端口被占用：启动失败要抛出，交给调用方提示 */
-await rejects(startAdmin({ port, conn: { status: () => conn } }), { code: 'EADDRINUSE' });
+await rejects(startAdmin({ port, conn: adapter }), { code: 'EADDRINUSE' });
 
 setPause(b, 0);
 server.close();

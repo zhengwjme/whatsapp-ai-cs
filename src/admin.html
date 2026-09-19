@@ -23,8 +23,13 @@
   .muted { color: var(--muted); font-size: 12px; }
   .last { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
   .hand { color: var(--warn); font-size: 12px; }
-  #detail { overflow-y: auto; padding: 16px; }
-  #detail h2 { font-size: 15px; margin: 0 0 8px; }
+  #detail { display: flex; flex-direction: column; min-height: 0; }
+  #thread { flex: 1; overflow-y: auto; padding: 16px; }
+  #composer { display: flex; gap: 8px; align-items: flex-end; padding: 10px 16px; border-top: 1px solid var(--line); background: var(--panel); }
+  #composer[hidden] { display: none; }
+  #composer textarea { flex: 1; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; min-height: 38px; }
+  #composer .note { font-size: 12px; }
+  #thread h2 { font-size: 15px; margin: 0 0 8px; }
   .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
   button:disabled { opacity: .45; cursor: default; }
   .msg { max-width: 70ch; margin: 6px 0; padding: 6px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -42,7 +47,13 @@
 </header>
 <main>
   <ul id="list"></ul>
-  <section id="detail"></section>
+  <section id="detail">
+    <div id="thread"></div>
+    <form id="composer" hidden>
+      <textarea id="text" rows="2"></textarea>
+      <div><button id="send" type="submit"></button><div id="sendNote" class="note hand"></div></div>
+    </form>
+  </section>
 </main>
 <script>
 const T = {
@@ -50,18 +61,21 @@ const T = {
         loggedOut: 'Logged out', offline: 'Admin server unreachable', noChats: 'No chats yet', pick: 'Select a chat to see its history',
         user: 'Customer', assistant: 'Bot', operator: 'Operator', more: 'Load more', bot: 'Bot is replying',
         left: (h, m) => `Handoff · ${h}h ${m}m left`, handoff: 'Hand off to human', rehandoff: 'Restart handoff timer',
-        resume: 'Resume bot', failed: 'Action failed' },
+        resume: 'Resume bot', failed: 'Action failed', send: 'Send', sending: 'Sending…', placeholder: 'Reply to the customer (counts as operator takeover)',
+        notConnected: 'WhatsApp is not connected, cannot send', sendFailed: 'Not sent: ' },
   zh: { title: 'WhatsApp 机器人管理', switch: 'English', open: '已连接', connecting: '断线重连中', qr: '需要登录',
         loggedOut: '已登出', offline: '管理服务无法访问', noChats: '还没有会话', pick: '选择一个会话查看历史',
         user: '客户', assistant: '机器人', operator: '运营', more: '加载更多', bot: '机器人接待中',
         left: (h, m) => `转人工中 · 剩 ${h} 小时 ${m} 分`, handoff: '手动转人工', rehandoff: '重新计满转人工期',
-        resume: '恢复接待', failed: '操作失败' },
+        resume: '恢复接待', failed: '操作失败', send: '发送', sending: '发送中…', placeholder: '回复客户（视为运营接管）',
+        notConnected: 'WhatsApp 未连接，无法发送', sendFailed: '没发出去：' },
 };
 let lang = 'en';
 try { lang = localStorage.getItem('lang') === 'zh' ? 'zh' : 'en'; } catch {}
 const t = k => T[lang][k];
 
 let state = 'connecting', chats = [], openChat = null, msgs = [], hasMore = false, actFailed = false;
+let sending = false, sendError = '';
 const PAGE = 200;
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -73,7 +87,11 @@ const handoff = until => {
   const mins = Math.ceil(ms / 60e3);
   return t('left')(Math.floor(mins / 60), mins % 60);
 };
-const get = async (path, method) => { const r = await fetch(path, { method }); if (!r.ok) throw new Error((await r.json()).error); return r.json(); };
+const get = async (path, method, body) => {
+  const r = await fetch(path, { method, body: body && JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.json()).error);
+  return r.json();
+};
 const historyUrl = (chat, before) => `/api/chats/${encodeURIComponent(chat)}/messages` + (before ? `?before=${before}` : '');
 
 function render() {
@@ -97,7 +115,8 @@ function render() {
     return li;
   }) : [el('li', 'empty', t('noChats'))]));
 
-  const detail = document.getElementById('detail');
+  const detail = document.getElementById('thread');
+  renderComposer();
   if (!openChat) return detail.replaceChildren(el('p', 'empty', t('pick')));
   const nodes = [el('h2', null, phone(openChat))];
   const left = handoff(chats.find(c => c.chat === openChat)?.until || 0);
@@ -137,12 +156,36 @@ async function refresh() {
 }
 
 async function select(chat) {
-  openChat = chat; msgs = []; hasMore = false; actFailed = false;
+  openChat = chat; msgs = []; hasMore = false; actFailed = false; sendError = '';
+  document.getElementById('text').value = '';
   render();
   await refresh();
-  const detail = document.getElementById('detail');
+  const detail = document.getElementById('thread');
   detail.scrollTop = detail.scrollHeight;
 }
+
+// 输入框不随轮询重建（否则打到一半的字会丢），这里只更新文案和可用状态
+function renderComposer() {
+  const form = document.getElementById('composer'), btn = document.getElementById('send');
+  form.hidden = !openChat;
+  document.getElementById('text').placeholder = t('placeholder');
+  btn.textContent = t(sending ? 'sending' : 'send');
+  btn.disabled = sending || state !== 'open';
+  document.getElementById('sendNote').textContent = state !== 'open' ? t('notConnected') : sendError && t('sendFailed') + sendError;
+}
+
+document.getElementById('composer').onsubmit = async e => {
+  e.preventDefault();
+  const box = document.getElementById('text'), text = box.value, chat = openChat;
+  if (!text.trim() || sending) return;
+  sending = true; sendError = ''; renderComposer();
+  try {
+    await get(`/api/chats/${encodeURIComponent(chat)}/send`, 'POST', { text });
+    if (chat === openChat) box.value = '';            // 发成功才清空；失败保留，方便重试
+  } catch (err) { sendError = err.message; }
+  sending = false;
+  await refresh();
+};
 
 async function act(action) {             // 手动转人工 / 恢复接待，做完立刻刷新状态
   actFailed = false;
@@ -155,7 +198,7 @@ async function loadMore() {
   const chat = openChat, older = await get(historyUrl(chat, msgs.at(-1).id));
   if (chat !== openChat) return;
   msgs = [...msgs, ...older]; hasMore = older.length === PAGE;
-  const detail = document.getElementById('detail'), fromBottom = detail.scrollHeight - detail.scrollTop;
+  const detail = document.getElementById('thread'), fromBottom = detail.scrollHeight - detail.scrollTop;
   render();
   detail.scrollTop = detail.scrollHeight - fromBottom;   // 往前翻时保持当前位置
 }

@@ -4,17 +4,19 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { listChats, historyPage, openHandoff, resume } from './lib.mjs';
+import { listChats, historyPage, openHandoff, resume, operatorSend } from './lib.mjs';
 
 const PAGE = readFileSync(new URL('./admin.html', import.meta.url));
 
 /**
- * @param opts {{port: number, conn: {status(): {state: 'connecting'|'open'|'qr'|'loggedOut', qr?: string}}}}
- *   conn 是传输层注入的连接适配器
+ * @param opts {{port: number, conn: {
+ *   status(): {state: 'connecting'|'open'|'qr'|'loggedOut', qr?: string},
+ *   send(chat: string, text: string): Promise<string|undefined>}}}
+ *   conn 是传输层注入的连接适配器；send 以本号身份发文字、返回消息 id
  * @returns {Promise<import('node:http').Server>} 监听失败（如端口被占用）时 reject
  */
 export function startAdmin({ port, conn }) {
-  const server = createServer((req, res) => {
+  const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/')) return res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(PAGE);
     const json = (status, body) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
@@ -29,6 +31,16 @@ export function startAdmin({ port, conn }) {
           return json(200, historyPage(chat, +q.get('before') || undefined, +q.get('limit') || undefined));
         case 'POST /api/chats/:chat/handoff': return json(200, { until: openHandoff(chat) });   // 手动转人工
         case 'POST /api/chats/:chat/resume': resume(chat); return json(200, {});             // 恢复接待
+        case 'POST /api/chats/:chat/send': {                                                   // 运营发送
+          const { text } = await readJson(req);
+          if (typeof text !== 'string' || !text.trim()) return json(400, { error: 'message is empty', field: 'text' });
+          if (conn.status().state !== 'open') return json(409, { error: 'WhatsApp is not connected' });
+          try {
+            return json(200, { until: await operatorSend(chat, text, t => conn.send(chat, t)) });
+          } catch (e) {
+            return json(502, { error: `send failed: ${e.message}` });
+          }
+        }
         default: return json(404, { error: 'not found' });
       }
     } catch (e) {
@@ -39,4 +51,10 @@ export function startAdmin({ port, conn }) {
     server.once('error', reject);
     server.listen(port, '127.0.0.1', () => resolve(server));
   });
+}
+
+async function readJson(req) {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  try { return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}'); } catch { return {}; }
 }
