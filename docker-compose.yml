@@ -26,7 +26,7 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY}
       OPENAI_MODEL: ${OPENAI_MODEL:-deepseek-chat}
       LLM_TIMEOUT_MS: ${LLM_TIMEOUT_MS:-30000}
-      SYSTEM_PROMPT: ${SYSTEM_PROMPT:-你是外贸客服助手，简洁专业，先答问题再问需求。不确定的不要编，说转人工。}
+      SYSTEM_PROMPT: ${SYSTEM_PROMPT:-你是外贸客服助手，简洁专业，先答问题再问需求。不确定的不要编：能答的部分照常回答，答不上来的在回复末尾附上 [[HANDOFF]]，不要自己说转人工。}
       REPLY_GROUPS: "false"
       PAUSE_KEYWORD: 人工,转人工,human agent,real person
       PAUSE_HOURS: "12"
