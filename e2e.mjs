@@ -1,6 +1,6 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
- * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 去重 · 转人工暂停 · io 失败不崩
+ * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 去重 · 转人工暂停 · io 失败不崩
  * 用法：npm run e2e        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
@@ -16,7 +16,7 @@ process.env.PAUSE_HOURS = '1';
 process.env.SYSTEM_PROMPT = 'sys';
 rmSync('./data/e2e', { recursive: true, force: true });   // 每次全新库，免得消息 id 撞上去重表
 
-let mode = 'ok';                                          // ok | fail | hang | empty
+let mode = 'ok';                                          // ok | fail | hang | empty | mark | markOnly
 const calls = [];                                         // 每次调用的 messages 快照
 const llm = createServer((req, res) => {
   let body = '';
@@ -27,7 +27,7 @@ const llm = createServer((req, res) => {
     if (mode === 'fail') return res.writeHead(500).end('boom');
     if (mode === 'hang') return;                          // 永不响应，用来测超时
     const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
-    const content = mode === 'empty' ? '  ' : `echo:${last}`;
+    const content = { empty: '  ', mark: `echo:${last}\n${HANDOFF_MARK}`, markOnly: HANDOFF_MARK }[mode] ?? `echo:${last}`;
     res.writeHead(200, { 'Content-Type': 'application/json' })
       .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
   });
@@ -35,7 +35,7 @@ const llm = createServer((req, res) => {
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
 process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
 
-const { CFG, handleIncoming, historyOf, pauseUntil, wantsHuman } = await import('./lib.mjs');
+const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, wantsHuman } = await import('./lib.mjs');
 eq(CFG.baseUrl, process.env.OPENAI_BASE_URL);
 
 const makeIo = () => {
@@ -114,6 +114,31 @@ const handedOff = (chat, io, what) => {
   ok(dt >= 900 && dt < 5000, `超时后应尽快失败，实际 ${dt}ms`);
   handedOff(chat, io, '超时');
   mode = 'ok';
+}
+
+/* 4b) 机器人无法回答：模型附约定标记 → 先发去掉标记的正文，再发话术并转人工；标记不外泄、不入历史 */
+{
+  mode = 'mark';
+  const io = makeIo(); const chat = 'c4b@s.whatsapp.net';
+  await handleIncoming({ id: '4b', chat, from: chat, body: 'Q-部分' }, io);
+  eq(io.sent.join('|'), `echo:Q-部分|${CFG.handoffText}`, '先正文、再话术');
+  ok(pauseUntil(chat) > Date.now(), '带标记应进入转人工期');
+  eq(JSON.stringify(historyOf(chat, 20).map(m => [m.role, m.content])),
+    JSON.stringify([['user', 'Q-部分'], ['assistant', 'echo:Q-部分'], ['assistant', CFG.handoffText]]),
+    '历史：客户消息、正文、话术');
+  eq(io.stopped, 1, '带标记也要收掉「正在输入」');
+
+  mode = 'markOnly';
+  const io2 = makeIo(); const chat2 = 'c4c@s.whatsapp.net';
+  await handleIncoming({ id: '4c', chat: chat2, from: chat2, body: 'Q-只有标记' }, io2);
+  eq(io2.sent.join('|'), CFG.handoffText, '只有标记时只发话术');
+  ok(pauseUntil(chat2) > Date.now(), '只有标记也应进入转人工期');
+  eq(roles(chat2), 'user,assistant', '只有标记：历史只多一条话术');
+  mode = 'ok';
+
+  const leaked = [...io.sent, ...io2.sent, ...historyOf(chat, 20).map(m => m.content), ...historyOf(chat2, 20).map(m => m.content)]
+    .filter(t => t.includes(HANDOFF_MARK));
+  eq(leaked.length, 0, '标记不能发给客户、不能进历史');
 }
 
 /* 5) 转人工：话术发成功才静默；发失败不能把客户晾着 */

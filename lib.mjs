@@ -16,12 +16,15 @@ const num = (v, d) => {
   return v === undefined || v === '' || !Number.isFinite(n) || n <= 0 ? d : n;
 };
 
+/** 机器人无法回答的约定标记：只有代码和默认 SYSTEM_PROMPT 知道，不做配置项 */
+export const HANDOFF_MARK = '[[HANDOFF]]';
+
 export const CFG = {
   dataDir: process.env.DATA_DIR || './data',
   baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
   apiKey: process.env.OPENAI_API_KEY || '',
   model: process.env.OPENAI_MODEL || 'deepseek-chat',
-  system: process.env.SYSTEM_PROMPT || '你是客服助手，回答简洁专业。不确定的不要编，直接说转人工。',
+  system: process.env.SYSTEM_PROMPT || `你是客服助手，回答简洁专业。不确定的不要编：能答的部分照常回答，答不上来的在回复末尾附上 ${HANDOFF_MARK}，不要自己说转人工。`,
   replyGroups: process.env.REPLY_GROUPS === 'true',
   history: num(process.env.HISTORY_TURNS, 12),
   pauseKeyword: (process.env.PAUSE_KEYWORD || '人工,转人工,human agent,real person').split(',').map(s => s.trim()).filter(Boolean),
@@ -55,6 +58,11 @@ export function shouldReply(msg, cfg = CFG) {
 export function wantsHuman(body, cfg = CFG) {
   const t = (body || '').toLowerCase();
   return cfg.pauseKeyword.some(k => t.includes(k.toLowerCase()));
+}
+
+/** 拆出模型回复里的标记：text 是去掉标记后要发给客户的正文（可能为空） */
+export function splitHandoff(reply) {
+  return { text: reply.replaceAll(HANDOFF_MARK, '').trim(), handoff: reply.includes(HANDOFF_MARK) };
 }
 
 /** 拟人打字延迟：按字数估算，封顶 6s。ponytail: 固定启发式，被限流再调 */
@@ -144,9 +152,13 @@ async function run(msg, io) {
       console.error('[llm failed]', chat, CFG.debug ? (e.stack || e.message) : e.message);
       return await handoff(chat, io);
     }
-    await sleep(typingDelay(reply));
-    await io.send(reply);
-    saveMsg(chat, 'assistant', reply);
+    const { text, handoff: cannotAnswer } = splitHandoff(reply);
+    if (text) {
+      await sleep(typingDelay(text));
+      await io.send(text);
+      saveMsg(chat, 'assistant', text);
+    }
+    if (cannotAnswer) await handoff(chat, io);         // 答上的先发，答不上的交给人
   } finally {
     await io.stopTyping?.().catch(() => {});           // 失败也要收掉「正在输入」
   }
@@ -183,6 +195,9 @@ export function selftest() {
   eq(wantsHuman('can I talk to a human agent?'), true);
   eq(wantsHuman('I WANT A REAL PERSON'), true);
   eq(wantsHuman('I need a human', { ...CFG, pauseKeyword: ['human'] }), true);   // 想踩坑可以自己加，配置说了算
+  eq(JSON.stringify(splitHandoff('hi')), '{"text":"hi","handoff":false}');
+  eq(JSON.stringify(splitHandoff(`部分答案\n${HANDOFF_MARK}`)), '{"text":"部分答案","handoff":true}');
+  eq(JSON.stringify(splitHandoff(HANDOFF_MARK)), '{"text":"","handoff":true}');
   ok(typingDelay('') < 1300 && typingDelay('x'.repeat(500)) === 6000, 'typing delay bounds');
   // 环境变量填错要回默认值，不能变 NaN
   eq(num('abc', 12), 12);
