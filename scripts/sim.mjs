@@ -12,16 +12,16 @@ const chat = `sim-${Date.now().toString(36)}@s.whatsapp.net`;      // 每次运�
 let n = 0, out = 0;
 
 const io = {
-  typing: async () => process.stdout.write('\n  [正在输入…]\n'),
+  typing: async () => process.stdout.write('\n  [typing…]\n'),
   stopTyping: async () => {},
-  send: async text => { console.log(`\n客服> ${text}\n`); return `${chat}#out${++out}`; },   // 像真传输层一样返回 id
+  send: async text => { console.log(`\nBot> ${text}\n`); return `${chat}#out${++out}`; },   // 像真传输层一样返回 id
 };
 
-console.log(`模拟客户对话 · 模型 ${CFG.model} · ${CFG.baseUrl}`);
-console.log(`提示词：${CFG.system.slice(0, 40)}…`);
-console.log(`输入「人工」测试转人工；输入「exit」退出。\n`);
+console.log(`Simulated customer chat · model ${CFG.model} · ${CFG.baseUrl}`);
+console.log(`Prompt: ${CFG.system.slice(0, 60)}…`);
+console.log(`Type "${CFG.pauseKeyword[0]}" to test the handoff; type "exit" to quit.\n`);
 
-const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: '你> ' });
+const rl = createInterface({ input: process.stdin, output: process.stdout, prompt: 'You> ' });
 let closed = false;
 let chain = Promise.resolve();                      // 串行处理：粘贴多行时不会乱序
 rl.on('close', () => { closed = true; });

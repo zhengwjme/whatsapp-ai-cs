@@ -20,13 +20,13 @@ export const CFG = {
   baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
   apiKey: process.env.OPENAI_API_KEY || '',
   model: process.env.OPENAI_MODEL || 'deepseek-chat',
-  system: process.env.SYSTEM_PROMPT || `你是客服助手，回答简洁专业。不确定的不要编：能答的部分照常回答，答不上来的在回复末尾附上 ${HANDOFF_MARK}，不要自己说转人工。`,
+  system: process.env.SYSTEM_PROMPT || `You are a customer service assistant for a UK business. Reply in concise, friendly British English; if the customer writes in another language, reply in that language. Answer the question first, then ask about their needs. Never make things up: answer what you can, and if you can't answer something, end your reply with ${HANDOFF_MARK}. Never say you are transferring them yourself.`,
   replyGroups: process.env.REPLY_GROUPS === 'true',
   history: num(process.env.HISTORY_TURNS, 12),
-  pauseKeyword: (process.env.PAUSE_KEYWORD || '人工,转人工,human agent,real person').split(',').map(s => s.trim()).filter(Boolean),
+  pauseKeyword: (process.env.PAUSE_KEYWORD || 'speak to a human,real person,human agent,speak to someone,talk to someone').split(',').map(s => s.trim()).filter(Boolean),
   pauseHours: num(process.env.PAUSE_HOURS, 12),
   llmTimeout: num(process.env.LLM_TIMEOUT_MS, 30000),
-  handoffText: process.env.HANDOFF_TEXT || '已为您转接人工，稍后回复您。',
+  handoffText: process.env.HANDOFF_TEXT || "Thanks for your patience. I'm passing you to a member of our team, who'll reply shortly.",
   debug: process.env.DEBUG === '1',                       // 失败日志带调用栈
   phone: process.env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
 };
@@ -45,7 +45,7 @@ export function shouldReply(msg, cfg = CFG) {
 
 /**
  * 命中转人工关键词：子串、不分大小写。
- * 默认只给词组（`human agent` / `real person`）——**单独一个 `human` 不能放默认值**：
+ * 默认只给词组（`speak to a human` / `real person` 等）——**单独一个 `human` 不能放默认值**：
  * "do you sell human hair wigs?" 里 human 是独立单词，词边界也拦不住，会把正常咨询判成要人工，
  * 那个客户就被静默 12 小时。关键词要加就加词组。
  */
@@ -60,7 +60,7 @@ export function splitHandoff(reply) {
 }
 
 /** 非文字消息在会话历史里的类型占位：模型看不到内容，但知道那里有一条 */
-const MEDIA_LABEL = { voice: '[语音]', image: '[图片]', video: '[视频]', file: '[文件]' };
+const MEDIA_LABEL = { voice: '[voice message]', image: '[image]', video: '[video]', file: '[file]' };
 
 /** 拟人打字延迟：按字数估算，封顶 6s。ponytail: 固定启发式，被限流再调 */
 export function typingDelay(text, rand = Math.random) {
@@ -116,7 +116,7 @@ export async function askLLM(chat) {
   });
   if (!r.ok) throw new Error(`LLM ${r.status} ${await r.text()}`);
   const reply = ((await r.json()).choices?.[0]?.message?.content || '').trim();
-  if (!reply) throw new Error('LLM 返回空内容');
+  if (!reply) throw new Error('LLM returned empty content');
   return reply;
 }
 
@@ -142,7 +142,7 @@ async function handoff(chat, io) {
 async function say(chat, io, text) {
   const id = await io.send(text);
   if (id) markSent(id);
-  else console.warn('[send] 传输层没返回消息 id：这条的回显会被当成运营接管', chat);   // 传输层接错了要吵出来
+  else console.warn('[send] transport returned no message id; its echo will be treated as an operator takeover', chat);   // 传输层接错了要吵出来
   saveMsg(chat, 'assistant', text);
 }
 

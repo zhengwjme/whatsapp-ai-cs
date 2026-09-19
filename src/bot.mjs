@@ -31,16 +31,16 @@ async function start() {
         pairingRequested = true;
         try {
           const code = await sock.requestPairingCode(CFG.phone);
-          console.log(`\n配对码: ${code}\n手机 WhatsApp → 已关联的设备 → 关联设备 → 改用配对码登录 → 输入上面的码\n`);
-        } catch (e) { console.error('配对码失败，改用二维码:', e.message); qrcode.generate(qr, { small: true }); }
+          console.log(`\nPairing code: ${code}\nOn your phone: WhatsApp → Linked devices → Link a device → Link with phone number instead → enter the code above\n`);
+        } catch (e) { console.error('Pairing code failed, falling back to QR code:', e.message); qrcode.generate(qr, { small: true }); }
       } else {
         qrcode.generate(qr, { small: true });
       }
     }
-    if (connection === 'open') console.log('已连接 WhatsApp，开始自动回复');
+    if (connection === 'open') console.log('Connected to WhatsApp, auto-reply is running');
     if (connection === 'close') {
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
-      console.log(loggedOut ? '已被登出，请删除 data/baileys-auth 后重新登录' : '连接断开，5 秒后重连…');
+      console.log(loggedOut ? 'Logged out. Delete data/baileys-auth and log in again' : 'Connection lost, reconnecting in 5 seconds…');
       if (!loggedOut) setTimeout(start, 5000);
     }
   });
@@ -62,4 +62,4 @@ async function start() {
   });
 }
 
-start().catch(e => { console.error('启动失败:', e); process.exit(1); });
+start().catch(e => { console.error('Failed to start:', e); process.exit(1); });

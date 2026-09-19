@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "个人 WhatsApp 号 AI 客服：Baileys 直连，接任意 OpenAI 兼容 LLM",
+  "description": "AI customer service on a personal WhatsApp number (Baileys), backed by any OpenAI-compatible LLM",
   "engines": {
     "node": ">=22.13"
   },

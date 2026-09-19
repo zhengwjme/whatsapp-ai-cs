@@ -13,7 +13,7 @@ eq(shouldReply({ from: '123@g.us', body: 'hi' }, { ...CFG, replyGroups: true }),
 eq(shouldReply({ from: 'status@broadcast', body: 'x' }), false);
 eq(shouldReply({ from: 'a@s.whatsapp.net', body: '   ' }), false);
 eq(shouldReply({ from: 'a@s.whatsapp.net', body: '', media: 'voice' }), true);
-eq(wantsHuman('我要转人工'), true);
+eq(wantsHuman('I want to speak to a human'), true);
 eq(wantsHuman('what is the price'), false);
 // 转人工关键词不能误伤正常咨询（外贸里 "human hair" 是高频词 → 默认不给裸 human）
 eq(wantsHuman('do you sell human hair wigs?'), false);
@@ -22,7 +22,7 @@ eq(wantsHuman('can I talk to a human agent?'), true);
 eq(wantsHuman('I WANT A REAL PERSON'), true);
 eq(wantsHuman('I need a human', { ...CFG, pauseKeyword: ['human'] }), true);   // 想踩坑可以自己加，配置说了算
 eq(JSON.stringify(splitHandoff('hi')), '{"text":"hi","handoff":false}');
-eq(JSON.stringify(splitHandoff(`部分答案\n${HANDOFF_MARK}`)), '{"text":"部分答案","handoff":true}');
+eq(JSON.stringify(splitHandoff(`partial answer\n${HANDOFF_MARK}`)), '{"text":"partial answer","handoff":true}');
 eq(JSON.stringify(splitHandoff(HANDOFF_MARK)), '{"text":"","handoff":true}');
 ok(typingDelay('') < 1300 && typingDelay('x'.repeat(500)) === 6000, 'typing delay bounds');
 // 环境变量填错要回默认值，不能变 NaN
