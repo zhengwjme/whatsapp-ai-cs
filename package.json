@@ -8,10 +8,9 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "start": "node --env-file-if-exists=.env bot-baileys.mjs",
-    "selftest": "node bot-baileys.mjs --selftest",
-    "e2e": "node e2e.mjs",
-    "sim": "node --env-file-if-exists=.env sim.mjs"
+    "start": "node --env-file-if-exists=.env src/bot.mjs",
+    "test": "node --test",
+    "sim": "node --env-file-if-exists=.env scripts/sim.mjs"
   },
   "dependencies": {
     "baileys": "^7.0.0-rc14",

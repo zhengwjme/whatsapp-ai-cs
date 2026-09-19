@@ -1,15 +1,13 @@
 /**
  * 大脑：与传输方式无关的全部逻辑（判定 / 上下文 / LLM / 去重 / 转人工）。
- * 传输层见 bot-baileys.mjs（Baileys 直连）。
- * 自检：node lib.mjs --selftest        离线端到端：node e2e.mjs
+ * 传输层见 bot.mjs（Baileys 直连）。测试：npm test
  */
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { strictEqual as eq, ok } from 'node:assert';
 
 /** 环境变量兜底：填错/留空时回默认值，别让 NaN 变成「静默不回消息」 */
-const num = (v, d) => {
+export const num = (v, d) => {
   const n = +v;
   return v === undefined || v === '' || !Number.isFinite(n) || n <= 0 ? d : n;
 };
@@ -82,12 +80,9 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_msg ON msg(chat_id);                    -- 别让 historyOf 全表扫
 `);
 // 表会一直长，启动时滚一刀。ponytail: 固定保留期，要长期留档就先导出再删
-// 但自检不能有破坏性副作用：`node lib.mjs --selftest` 用的是同一个 DATA_DIR，不许顺手删生产库
-if (!process.argv.includes('--selftest')) {
-  db.prepare('DELETE FROM seen WHERE ts < ?').run(Date.now() - 30 * 864e5);
-  db.prepare('DELETE FROM sent WHERE ts < ?').run(Date.now() - 30 * 864e5);
-  db.prepare('DELETE FROM msg  WHERE ts < ?').run(Date.now() - 180 * 864e5);
-}
+db.prepare('DELETE FROM seen WHERE ts < ?').run(Date.now() - 30 * 864e5);
+db.prepare('DELETE FROM sent WHERE ts < ?').run(Date.now() - 30 * 864e5);
+db.prepare('DELETE FROM msg  WHERE ts < ?').run(Date.now() - 180 * 864e5);
 
 export const alreadySeen = id =>
   db.prepare('INSERT OR IGNORE INTO seen(id, ts) VALUES(?,?)').run(id, Date.now()).changes === 0;
@@ -211,44 +206,3 @@ export function handleIncoming(msg, io) {
   p.then(() => { if (chains.get(msg.chat) === p) chains.delete(msg.chat); });   // 防 map 涨
   return p;
 }
-
-/* ---------- 自检 ---------- */
-export function selftest() {
-  eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi' }), true);
-  eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi', fromMe: true }), true);   // 可能是运营接管，交给 run
-  eq(shouldReply({ from: '123@g.us', body: 'hi' }), false);
-  eq(shouldReply({ from: '123@g.us', body: 'hi' }, { ...CFG, replyGroups: true }), true);
-  eq(shouldReply({ from: 'status@broadcast', body: 'x' }), false);
-  eq(shouldReply({ from: 'a@s.whatsapp.net', body: '   ' }), false);
-  eq(shouldReply({ from: 'a@s.whatsapp.net', body: '', media: 'voice' }), true);
-  eq(wantsHuman('我要转人工'), true);
-  eq(wantsHuman('what is the price'), false);
-  // 转人工关键词不能误伤正常咨询（外贸里 "human hair" 是高频词 → 默认不给裸 human）
-  eq(wantsHuman('do you sell human hair wigs?'), false);
-  eq(wantsHuman('humanoid robot?'), false);
-  eq(wantsHuman('can I talk to a human agent?'), true);
-  eq(wantsHuman('I WANT A REAL PERSON'), true);
-  eq(wantsHuman('I need a human', { ...CFG, pauseKeyword: ['human'] }), true);   // 想踩坑可以自己加，配置说了算
-  eq(JSON.stringify(splitHandoff('hi')), '{"text":"hi","handoff":false}');
-  eq(JSON.stringify(splitHandoff(`部分答案\n${HANDOFF_MARK}`)), '{"text":"部分答案","handoff":true}');
-  eq(JSON.stringify(splitHandoff(HANDOFF_MARK)), '{"text":"","handoff":true}');
-  ok(typingDelay('') < 1300 && typingDelay('x'.repeat(500)) === 6000, 'typing delay bounds');
-  // 环境变量填错要回默认值，不能变 NaN
-  eq(num('abc', 12), 12);
-  eq(num('', 12), 12);
-  eq(num('0', 12), 12);
-  eq(num('5', 12), 5);
-  // 同毫秒的一问一答，历史顺序必须是「先问后答」
-  const c = `__selftest__${Date.now()}`;
-  try {
-    saveMsg(c, 'user', 'q1'); saveMsg(c, 'assistant', 'a1');
-    saveMsg(c, 'user', 'q2'); saveMsg(c, 'assistant', 'a2');
-    eq(historyOf(c, 12).map(m => m.role).join(','), 'user,assistant,user,assistant');
-    eq(historyOf(c, 2).map(m => m.role).join(','), 'user,assistant');
-  } finally {
-    db.prepare('DELETE FROM msg WHERE chat_id=?').run(c);
-  }
-  console.log('selftest OK');
-}
-
-if (process.argv[1]?.endsWith('lib.mjs') && process.argv.includes('--selftest')) selftest();

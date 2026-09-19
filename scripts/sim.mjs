@@ -6,7 +6,7 @@
 import { createInterface } from 'node:readline';
 
 process.env.DATA_DIR = process.env.SIM_DATA_DIR || './data/sim';   // 模拟对话单独落库，不污染真实记录
-const { CFG, handleIncoming } = await import('./lib.mjs');
+const { CFG, handleIncoming } = await import('../src/lib.mjs');
 
 const chat = `sim-${Date.now().toString(36)}@s.whatsapp.net`;      // 每次运行都是新客户，避免上次的「转人工」残留
 let n = 0, out = 0;

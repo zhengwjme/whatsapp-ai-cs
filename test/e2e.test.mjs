@@ -1,7 +1,7 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
  * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 运营接管 · 去重 · 转人工暂停 · io 失败不崩
- * 用法：npm run e2e        （数据落在 data/e2e，不碰 data/bot.db）
+ * 用法：npm test        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
 import { rmSync } from 'node:fs';
@@ -35,7 +35,7 @@ const llm = createServer((req, res) => {
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
 process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
 
-const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman } = await import('./lib.mjs');
+const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman } = await import('../src/lib.mjs');
 eq(CFG.baseUrl, process.env.OPENAI_BASE_URL);
 
 let sentSeq = 0;
@@ -247,7 +247,7 @@ const handedOff = (chat, io, what) => {
   eq(roles(chat2), 'user,assistant', '话术回显不重复记入历史');
 
   // 7d) 进程重启后迟到的回显仍能识别（新模块实例 = 新进程的内存状态，只剩库里的记录）
-  const fresh = await import('./lib.mjs?restart');
+  const fresh = await import('../src/lib.mjs?restart');
   const chat3 = 'c7d@s.whatsapp.net'; const io3 = makeIo();
   await handleIncoming({ id: '7d-q', chat: chat3, from: chat3, body: 'Q7d' }, io3);
   await fresh.handleIncoming({ id: `sent-${sentSeq}`, chat: chat3, from: chat3, body: 'echo:Q7d', fromMe: true }, io3);
@@ -274,4 +274,3 @@ const handedOff = (chat, io, what) => {
 
 llm.closeAllConnections();   // fetch 是 keep-alive，不关连接脚本退不出去
 llm.close();
-console.log('e2e OK');
