@@ -208,7 +208,7 @@ OPENAI_API_KEY=ollama
 | 命令 | 作用 |
 |---|---|
 | `npm run sim` | 假客户模拟器：终端里跑完「判定→上下文→LLM→回发」，不用手机 |
-| `npm run selftest` | 纯逻辑自检（过滤 / 关键词边界 / 延迟 / 环境变量兜底 / 上下文顺序） |
+| `npm run selftest` | 纯逻辑自检（过滤 / 关键词边界 / 延迟 / 环境变量兜底 / 上下文顺序 / Baileys 消息归一化） |
 | `npm run e2e` | 离线端到端自检：起假 LLM，不联网不花钱（并发串行 · 模型报错/超时/空内容即转人工 · 转人工） |
 | `npm run e2e:waha` | WAHA 传输层自检：假 WAHA + 假 LLM 起真的 `bot.mjs`（路由 · 413 · 失败不崩） |
 | `npm run login` / `npm run start:baileys` | 扫码登录 / 启动（Baileys 直连） |
@@ -240,7 +240,7 @@ OPENAI_API_KEY=ollama
 
 | 检查 | 命令 / 做法 | 通过标准 |
 |---|---|---|
-| 逻辑自检 | `npm run selftest` | 输出 `selftest OK` |
+| 逻辑自检 | `npm run selftest` | 输出 `selftest OK` 和 `baileys normalize selftest OK` |
 | 端到端（离线） | `npm run e2e` | 输出 `e2e OK` |
 | WAHA 传输层 | `npm run e2e:waha` | 输出 `e2e-waha OK` |
 | 模型通不通 | `npm run sim` 问一句 | 回答专业、不编造 |
