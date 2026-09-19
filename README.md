@@ -77,6 +77,8 @@ npm start
 
 The first time, the terminal shows an 8-character pairing code. On the phone, open **WhatsApp → Settings → Linked devices → Link a device → Link with phone number instead** and enter the code. If `WHATSAPP_PHONE` is empty, a QR code is shown instead. Scan it from the same menu.
 
+The admin page (opens in your browser) can do the same without the terminal: its **WhatsApp** tab shows the QR code, can get a pairing code for a number, and has **Log out and relink** for switching numbers or recovering a broken login.
+
 When you see `Connected to WhatsApp, auto-reply is running`, the bot is live. Keep the window open.
 
 ### 6. Start automatically when Windows starts
@@ -144,7 +146,7 @@ Use phrases, not single words. `human` on its own would match "humane", and `age
 | Pairing code keeps failing | Check the number format (country code first, no `+`). Too many requests in a short time are rate-limited, so wait a few minutes. |
 | `LLM 401` or `LLM 404` in the log | Wrong API key or model name. `OPENAI_BASE_URL` must not end with `/chat/completions`. |
 | `node:sqlite` not found | Node.js is older than 22.13. Install Node.js 24. |
-| Phone shows "logged out from another device" | **Stop using that number immediately.** Delete `data\baileys-auth` and log in again. Check nobody was sending bulk messages. |
+| Phone shows "logged out from another device" | **Stop using that number immediately.** Use **Log out and relink** on the admin page (or delete `data\baileys-auth` and restart) to log in again. Check nobody was sending bulk messages. |
 
 ---
 

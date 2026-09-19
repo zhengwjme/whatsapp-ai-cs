@@ -7,6 +7,7 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { join } from 'node:path';
+import { rmSync } from 'node:fs';
 import { exec } from 'node:child_process';
 import { shouldReply, handleIncoming, CFG } from './lib.mjs';
 import { normalize } from './normalize.mjs';
@@ -15,7 +16,9 @@ import { startAdmin } from './admin.mjs';
 const AUTH_DIR = join(CFG.dataDir, 'baileys-auth');
 let pairingRequested = false;
 let conn = { state: 'connecting' };   // 连接适配器的当前状态：connecting | open | qr（附 qr 原始串）| loggedOut
-let current;                          // 当前这条连接的 socket：重连后换新，管理界面发消息用它
+let current;                          // 当前这条连接的 socket：重连后换新，管理界面发消息、申请配对码用它
+let retry;                            // 断线重连的定时器：重新关联时要取消，免得起两条连接
+let relinking;                        // 进行中的重新关联：连点两次只跑一次，否则会起两条连接、重复回复客户
 
 // 静音 Baileys 的内置 pino 日志，终端只留我们自己的输出（老 Windows 控制台更友好）
 const quiet = new Proxy({}, { get: () => () => quiet });
@@ -50,8 +53,8 @@ async function start() {
     if (connection === 'close') {
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
       conn = { state: loggedOut ? 'loggedOut' : 'connecting' };
-      console.log(loggedOut ? 'Logged out. Delete data/baileys-auth and log in again' : 'Connection lost, reconnecting in 5 seconds…');
-      if (!loggedOut) setTimeout(start, 5000);
+      console.log(loggedOut ? 'Logged out. Click "Log out and relink" on the admin page, or delete data/baileys-auth and restart' : 'Connection lost, reconnecting in 5 seconds…');
+      if (!loggedOut) retry = setTimeout(start, 5000);
     }
   });
 
@@ -74,11 +77,28 @@ async function start() {
 
 start().catch(e => { console.error('Failed to start:', e); process.exit(1); });
 
-// 管理界面起不来不影响机器人收发消息
 const adapter = {
   status: () => conn,
   send: async (chat, text) => (await current.sendMessage(chat, { text }))?.key?.id,   // 运营在管理界面回复客户
+  pair: phone => current.requestPairingCode(phone),                                  // 管理界面「用号码获取配对码」
+  relink: () => (relinking ??= relink().finally(() => { relinking = undefined; })),   // 管理界面「退出并重新关联」
 };
+
+/** 退出并重新关联：旧连接的事件一律不再处理（否则关闭会被当成登出/断线，creds 还会写回刚删的目录）→ 登出 → 清登录态 → 重连 */
+async function relink() {
+  clearTimeout(retry);
+  const old = current;
+  for (const e of ['connection.update', 'creds.update', 'messages.upsert']) old.ev.removeAllListeners(e);
+  await old.logout().catch(() => {});   // 让手机端移除本设备；已登出/未登录时会失败，无所谓
+  await old.end(undefined);
+  rmSync(AUTH_DIR, { recursive: true, force: true });
+  pairingRequested = false;
+  conn = { state: 'connecting' };
+  console.log('Relinking: logged out, waiting for a new login');
+  await start();
+}
+
+// 管理界面起不来不影响机器人收发消息
 startAdmin({ port: CFG.adminPort, conn: adapter, envFile: '.env' }).then(() => {
   const url = `http://127.0.0.1:${CFG.adminPort}`;
   console.log(`Admin page: ${url}`);

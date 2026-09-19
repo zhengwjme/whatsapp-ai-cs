@@ -44,6 +44,17 @@
   #settings input:not([type=checkbox]), #settings textarea { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
   #settings .bad { border-color: var(--bad) !important; outline: 1px solid var(--bad); }
   #settings .save { display: flex; align-items: center; gap: 12px; margin: 18px 0 32px; }
+  #link { max-width: 560px; margin: 0 auto; padding: 24px 16px; }
+  #link h2 { margin: 0 0 8px; font-size: 20px; }
+  #qr { width: 280px; max-width: 100%; margin: 12px 0; }
+  #qr svg { display: block; width: 100%; height: auto; }
+  #link .box { margin: 18px 0; padding-top: 14px; border-top: 1px solid var(--line); }
+  #link input { font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; width: 16em; }
+  #pairCode { font: 600 28px/1.2 ui-monospace, Consolas, monospace; letter-spacing: 3px; margin: 10px 0; }
+  .danger { color: var(--bad); border-color: var(--bad); }
+  dialog { border: 1px solid var(--line); border-radius: 10px; max-width: 420px; padding: 20px; }
+  dialog::backdrop { background: rgb(0 0 0 / .35); }
+  #status { cursor: pointer; background: none; }
   .okmsg { color: var(--ok); } .warnmsg { color: var(--warn); } .errmsg { color: var(--bad); }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; height: auto; } #list { max-height: 40vh; border-right: 0; } }
 </style>
@@ -51,8 +62,8 @@
 <body>
 <header>
   <h1 data-t="title"></h1>
-  <nav><button id="tabChats" data-t="chats"></button> <button id="tabSettings" data-t="settings"></button></nav>
-  <span id="status" class="badge"></span>
+  <nav><button id="tabChats" data-t="chats"></button> <button id="tabSettings" data-t="settings"></button> <button id="tabLink" data-t="whatsapp"></button></nav>
+  <button id="status" class="badge"></button>
   <button id="lang"></button>
 </header>
 <main>
@@ -65,6 +76,22 @@
     </form>
   </section>
 </main>
+<section id="link" hidden>
+  <h2 id="linkTitle"></h2>
+  <p id="linkText"></p>
+  <div id="qr"></div>
+  <form id="pair" class="box" hidden>
+    <label><span data-t="pairTitle"></span><br><span class="muted" data-t="pairHint"></span><br>
+      <input id="phone" inputmode="numeric" autocomplete="tel" placeholder="447700900123"> <button type="submit" data-t="pairGo"></button></label>
+    <div id="pairCode"></div>
+    <div id="pairNote"></div>
+  </form>
+  <div class="box"><button id="relink" class="danger"></button></div>
+</section>
+<dialog id="confirm">
+  <p data-t="relinkWarn"></p>
+  <form method="dialog"><button value="cancel" data-t="cancel"></button> <button value="ok" class="danger" data-t="relinkGo"></button></form>
+</dialog>
 <form id="settings" hidden>
   <label><span data-t="f_SYSTEM_PROMPT"></span> <span class="hint" data-t="h_SYSTEM_PROMPT"></span>
     <textarea name="SYSTEM_PROMPT" rows="14"></textarea></label>
@@ -100,7 +127,17 @@ const T = {
         h_HISTORY_TURNS: 'A question and its answer count as 2', f_REPLY_GROUPS: 'Also reply in group chats',
         f_OPENAI_BASE_URL: 'Model API address', f_OPENAI_API_KEY: 'API key', h_OPENAI_API_KEY: 'Leave blank to keep the current key',
         f_OPENAI_MODEL: 'Model name', f_LLM_TIMEOUT_MS: 'Model timeout (ms)', keySet: 'Current: ', keyUnset: 'Not set',
-        noMark: 'SYSTEM_PROMPT no longer mentions [[HANDOFF]], so the bot will never hand a chat over when it cannot answer.' },
+        noMark: 'SYSTEM_PROMPT no longer mentions [[HANDOFF]], so the bot will never hand a chat over when it cannot answer.',
+        whatsapp: 'WhatsApp', t_open: 'Connected', x_open: 'The bot is replying to customers.',
+        t_connecting: 'Connecting…', x_connecting: 'Please wait a few seconds.',
+        t_qr: 'Link this computer to WhatsApp', x_qr: 'On your phone open WhatsApp → Settings → Linked devices → Link a device, then scan this code. The code refreshes by itself.',
+        t_loggedOut: 'Logged out', x_loggedOut: 'This computer was removed from WhatsApp. Click “Link again” below.',
+        t_offline: 'Admin server unreachable', x_offline: 'Check that the bot window is still open.',
+        pairTitle: 'Or link with a phone number', pairHint: 'Country code first, digits only, no + or spaces (UK example: 447700900123)',
+        pairGo: 'Get pairing code', pairUse: 'On your phone: Linked devices → Link a device → Link with phone number instead, then enter this code.',
+        badPhone: 'Digits only, starting with the country code, no + or spaces.',
+        relink: 'Log out and relink', relinkWarn: 'This logs the bot out of WhatsApp and deletes its login. The bot stops replying to customers until you link it again. Continue?',
+        cancel: 'Cancel', relinkGo: 'Log out and relink', linkAgain: 'Link again' },
   zh: { title: 'WhatsApp 机器人管理', switch: 'English', open: '已连接', connecting: '断线重连中', qr: '需要登录',
         loggedOut: '已登出', offline: '管理服务无法访问', noChats: '还没有会话', pick: '选择一个会话查看历史',
         user: '客户', assistant: '机器人', operator: '运营', more: '加载更多', bot: '机器人接待中',
@@ -116,13 +153,24 @@ const T = {
         h_HISTORY_TURNS: '一问一答算 2 条', f_REPLY_GROUPS: '也回复群聊',
         f_OPENAI_BASE_URL: '模型地址', f_OPENAI_API_KEY: 'API Key', h_OPENAI_API_KEY: '留空表示不改',
         f_OPENAI_MODEL: '模型名', f_LLM_TIMEOUT_MS: '模型超时（毫秒）', keySet: '当前：', keyUnset: '未设置',
-        noMark: 'SYSTEM_PROMPT 里没有 [[HANDOFF]] 约定，机器人答不上来时不会再转人工。' },
+        noMark: 'SYSTEM_PROMPT 里没有 [[HANDOFF]] 约定，机器人答不上来时不会再转人工。',
+        whatsapp: 'WhatsApp', t_open: '已连接', x_open: '机器人正在接待客户。',
+        t_connecting: '连接中…', x_connecting: '请稍等几秒。',
+        t_qr: '把这台电脑关联到 WhatsApp', x_qr: '在手机上打开 WhatsApp → 设置 → 已关联的设备 → 关联新设备，扫描下面的二维码。二维码会自动刷新。',
+        t_loggedOut: '已登出', x_loggedOut: '这台电脑已从 WhatsApp 移除。点下面的“重新关联”。',
+        t_offline: '管理服务无法访问', x_offline: '请检查机器人窗口是否还开着。',
+        pairTitle: '或者用手机号关联', pairHint: '国家码开头，只填数字，不要 + 和空格（英国示例：447700900123）',
+        pairGo: '获取配对码', pairUse: '在手机上：已关联的设备 → 关联新设备 → 改用手机号关联，然后输入这个配对码。',
+        badPhone: '只填数字，国家码开头，不要 + 和空格。',
+        relink: '退出并重新关联', relinkWarn: '这会让机器人退出 WhatsApp 并删除登录信息。重新关联之前，机器人不会回复客户。确定继续？',
+        cancel: '取消', relinkGo: '退出并重新关联', linkAgain: '重新关联' },
 };
 let lang = 'en';
 try { lang = localStorage.getItem('lang') === 'zh' ? 'zh' : 'en'; } catch {}
 const t = k => T[lang][k];
 
-let state = 'connecting', chats = [], openChat = null, msgs = [], hasMore = false, actFailed = false;
+let state = 'connecting', qrSvg = '', chats = [], openChat = null, msgs = [], hasMore = false, actFailed = false;
+let firstStatus = true;
 let sending = false, sendError = '';
 const PAGE = 200;
 
@@ -149,6 +197,7 @@ function render() {
   document.getElementById('lang').textContent = t('switch');
   const s = document.getElementById('status');
   s.className = `badge ${state}`; s.textContent = t(state);
+  renderLink();
 
   const list = document.getElementById('list');
   list.replaceChildren(...(chats.length ? chats.map(c => {
@@ -190,7 +239,11 @@ function render() {
 
 async function refresh() {
   try {
-    [state, chats] = await Promise.all([get('/api/status').then(s => s.state), get('/api/chats')]);
+    let status;
+    [status, chats] = await Promise.all([get('/api/status'), get('/api/chats')]);
+    ({ state } = status); qrSvg = status.qrSvg || '';
+    if (firstStatus && (state === 'qr' || state === 'loggedOut')) showTab('link');   // 需要登录：打开就直接看到二维码
+    firstStatus = false;
     if (openChat) {
       const chat = openChat, latest = await get(historyUrl(chat));
       if (chat === openChat) {             // 轮询只刷最新一页；已加载的更早消息接在后面
@@ -255,12 +308,15 @@ async function loadMore() {
 const form = document.getElementById('settings');
 let keyMasked = '';
 
-function showTab(settings) {
-  document.querySelector('main').hidden = settings;
-  form.hidden = !settings;
-  document.getElementById('tabChats').className = settings ? '' : 'on';
-  document.getElementById('tabSettings').className = settings ? 'on' : '';
-  if (settings) loadSettings();
+function showTab(name) {
+  document.querySelector('main').hidden = name !== 'chats';
+  form.hidden = name !== 'settings';
+  document.getElementById('link').hidden = name !== 'link';
+  for (const [id, tab] of [['tabChats', 'chats'], ['tabSettings', 'settings'], ['tabLink', 'link']]) {
+    document.getElementById(id).className = name === tab ? 'on' : '';
+  }
+  if (name === 'settings') loadSettings();
+  if (name === 'link') get('/api/config').then(c => { if (!phoneInput.value) phoneInput.value = c.WHATSAPP_PHONE; }).catch(() => {});
 }
 
 async function loadSettings() {
@@ -308,9 +364,50 @@ form.onsubmit = async e => {
   note(res.warning ? 'warnmsg' : 'okmsg', res.warning ? `${t('saved')} ⚠ ${t('noMark')}` : t('saved'));
 };
 
-document.getElementById('tabChats').onclick = () => showTab(false);
-document.getElementById('tabSettings').onclick = () => showTab(true);
-showTab(false);
+/* ---------- WhatsApp 连接页：二维码 / 配对码 / 退出并重新关联 ---------- */
+const phoneInput = document.getElementById('phone');
+let shownQr = '', pairCode = '';
+
+function renderLink() {
+  document.getElementById('linkTitle').textContent = t(`t_${state}`);
+  document.getElementById('linkText').textContent = t(`x_${state}`);
+  if (state !== 'qr') pairCode = '';                   // 登上了/断了，旧配对码作废
+  const shown = state === 'qr' ? qrSvg : '';
+  if (shown !== shownQr) document.getElementById('qr').innerHTML = shownQr = shown;   // 服务端生成的 SVG，只在换码时重画
+  document.getElementById('pair').hidden = state !== 'qr';
+  document.getElementById('pairCode').textContent = pairCode;
+  document.getElementById('relink').textContent = t(state === 'loggedOut' ? 'linkAgain' : 'relink');
+  if (pairCode) document.getElementById('pairNote').textContent = t('pairUse');
+}
+
+document.getElementById('pair').onsubmit = async e => {
+  e.preventDefault();
+  const noteEl = document.getElementById('pairNote'), number = phoneInput.value.trim();
+  pairCode = ''; noteEl.className = 'errmsg';
+  if (!/^\d{7,15}$/.test(number)) { noteEl.textContent = t('badPhone'); return renderLink(); }
+  noteEl.textContent = '';
+  try {
+    pairCode = (await get('/api/pair', 'POST', { phone: number })).code;
+    noteEl.className = '';
+  } catch (err) { noteEl.textContent = err.message; }
+  renderLink();
+};
+
+const confirmDialog = document.getElementById('confirm');
+const relink = async () => { await get('/api/relink', 'POST').catch(() => {}); await refresh(); };
+// 已登出时没什么可丢的，直接重新关联；否则先确认（机器人会停止回复）
+document.getElementById('relink').onclick = () => (state === 'loggedOut' ? relink() : confirmDialog.showModal());
+confirmDialog.onclose = () => {
+  if (confirmDialog.returnValue !== 'ok') return;
+  confirmDialog.returnValue = '';
+  relink();
+};
+
+document.getElementById('tabChats').onclick = () => showTab('chats');
+document.getElementById('tabSettings').onclick = () => showTab('settings');
+document.getElementById('tabLink').onclick = () => showTab('link');
+document.getElementById('status').onclick = () => showTab('link');
+showTab('chats');
 
 document.getElementById('lang').onclick = () => {
   lang = lang === 'en' ? 'zh' : 'en';

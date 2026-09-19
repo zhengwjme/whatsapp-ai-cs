@@ -4,16 +4,36 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { listChats, historyPage, openHandoff, resume, operatorSend } from './lib.mjs';
-import { readConfig, saveConfig } from './config.mjs';
+import { readConfig, saveConfig, savePhone } from './config.mjs';
 
 const PAGE = readFileSync(new URL('./admin.html', import.meta.url));
+
+// 二维码用已装的 qrcode-terminal 自带的编码器（不加新依赖），自己画成 SVG
+const require = createRequire(import.meta.url);
+const QRCode = require('qrcode-terminal/vendor/QRCode');
+const QRErrorCorrectLevel = require('qrcode-terminal/vendor/QRCode/QRErrorCorrectLevel');
+
+/** 二维码字符串 → SVG：每个黑模块一个 1×1 方块，四周留 4 格白边 */
+function qrSvg(text) {
+  const qr = new QRCode(-1, QRErrorCorrectLevel.L);
+  qr.addData(text);
+  qr.make();
+  const n = qr.getModuleCount(), size = n + 8;
+  let d = '';
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (qr.isDark(r, c)) d += `M${c + 4} ${r + 4}h1v1h-1z`;
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges">`
+    + `<rect width="${size}" height="${size}" fill="#fff"/><path d="${d}" fill="#000"/></svg>`;
+}
 
 /**
  * @param opts {{port: number, envFile: string, conn: {
  *   status(): {state: 'connecting'|'open'|'qr'|'loggedOut', qr?: string},
- *   send(chat: string, text: string): Promise<string|undefined>}}}
- *   conn 是传输层注入的连接适配器；send 以本号身份发文字、返回消息 id；envFile 是配置写回的 .env 路径
+ *   send(chat: string, text: string): Promise<string|undefined>,
+ *   pair(phone: string): Promise<string>, relink(): Promise<void>}}}
+ *   conn 是传输层注入的连接适配器：send 以本号身份发文字、返回消息 id；pair 为号码申请配对码；
+ *   relink 退出登录、清除登录态、重新发起连接。envFile 是配置写回的 .env 路径
  * @returns {Promise<import('node:http').Server>} 监听失败（如端口被占用）时 reject
  */
 export function startAdmin({ port, conn, envFile }) {
@@ -26,7 +46,23 @@ export function startAdmin({ port, conn, envFile }) {
       const chat = decodeURIComponent(url.pathname.split('/')[3] || '');
       const q = url.searchParams;
       switch (route) {
-        case 'GET /api/status': return json(200, { state: conn.status().state });
+        case 'GET /api/status': {
+          const { state, qr } = conn.status();
+          return json(200, state === 'qr' && qr ? { state, qrSvg: qrSvg(qr) } : { state });
+        }
+        case 'POST /api/pair': {                                                               // 用号码获取配对码
+          const { phone } = await readJson(req);
+          if (typeof phone !== 'string' || !/^\d{7,15}$/.test(phone)) {
+            return json(400, { error: 'enter the number with country code, digits only, no + or spaces', field: 'phone' });
+          }
+          const { state } = conn.status();
+          if (state === 'open') return json(409, { error: 'WhatsApp is already connected' });
+          if (state !== 'qr') return json(409, { error: 'WhatsApp is not ready for login yet, try again in a moment' });
+          const code = await conn.pair(phone);
+          savePhone(envFile, phone);                                                           // 记住号码，下次重新关联不用再填
+          return json(200, { code });
+        }
+        case 'POST /api/relink': await conn.relink(); return json(200, {});                   // 退出并重新关联
         case 'GET /api/chats': return json(200, listChats());
         case 'GET /api/chats/:chat/messages':
           return json(200, historyPage(chat, +q.get('before') || undefined, +q.get('limit') || undefined));

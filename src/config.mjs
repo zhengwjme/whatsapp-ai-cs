@@ -27,12 +27,12 @@ const FIELDS = {
 const fieldError = (field, message) => Object.assign(new Error(message), { field });
 const mask = key => (!key ? '' : key.length > 8 ? `${key.slice(0, 3)}…${key.slice(-4)}` : '••••');
 
-/** 当前生效的配置（含默认值）。API Key 只给是否已设置和掩码 */
+/** 当前生效的配置（含默认值）。API Key 只给是否已设置和掩码；WHATSAPP_PHONE 只读（登录页预填，写回走 savePhone） */
 export const readConfig = () => ({
   SYSTEM_PROMPT: CFG.system, HANDOFF_TEXT: CFG.handoffText, PAUSE_KEYWORD: CFG.pauseKeyword,
   PAUSE_HOURS: CFG.pauseHours, HISTORY_TURNS: CFG.history, REPLY_GROUPS: CFG.replyGroups,
   OPENAI_BASE_URL: CFG.baseUrl, OPENAI_API_KEY: { set: !!CFG.apiKey, masked: mask(CFG.apiKey) },
-  OPENAI_MODEL: CFG.model, LLM_TIMEOUT_MS: CFG.llmTimeout,
+  OPENAI_MODEL: CFG.model, LLM_TIMEOUT_MS: CFG.llmTimeout, WHATSAPP_PHONE: CFG.phone,
 });
 
 /**
@@ -55,6 +55,13 @@ export function saveConfig(envFile, body) {
   return values.SYSTEM_PROMPT?.includes(HANDOFF_MARK) === false
     ? { warning: `SYSTEM_PROMPT does not mention ${HANDOFF_MARK}: the bot will never hand a chat to a human because it cannot answer` }
     : {};
+}
+
+/** 配对码登录用过的号码写回 WHATSAPP_PHONE（格式由调用方校验） */
+export function savePhone(envFile, phone) {
+  writeEnv(envFile, { WHATSAPP_PHONE: phone });
+  process.env.WHATSAPP_PHONE = phone;
+  Object.assign(CFG, loadCfg(process.env));
 }
 
 /**

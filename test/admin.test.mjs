@@ -1,6 +1,6 @@
 /**
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
- * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 配置读写 · 未知 API · 端口占用
+ * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 配置读写 · 网页登录与重新关联 · 未知 API · 端口占用
  */
 import { createServer } from 'node:http';
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
@@ -52,8 +52,12 @@ const { startAdmin } = await import('../src/admin.mjs');
 let conn = { state: 'connecting' };
 const outbox = [];                                        // 假适配器经 WhatsApp 发出的消息
 let sendFails = false;
+const paired = [];                                        // 假适配器收到的配对码请求
+let relinks = 0;
 const adapter = {
   status: () => conn,
+  pair: async phone => { paired.push(phone); return 'ABCD1234'; },
+  relink: async () => { relinks++; conn = { state: 'connecting' }; },
   send: async (chat, text) => {
     if (sendFails) throw new Error('send 500');
     outbox.push({ chat, text });
@@ -313,6 +317,51 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
   rmSync(ENV);
   eq((await cfgApi({ PAUSE_HOURS: 3 })).status, 200);
   eq(parseEnv(readFileSync(ENV, 'utf8')).PAUSE_HOURS, '3', '.env created when missing');
+}
+
+/* 网页登录：二维码 SVG、配对码（号码写回 .env）、退出并重新关联 */
+{
+  conn = { state: 'qr', qr: '2@first-qr-string,abc' };
+  const s1 = (await api('/api/status')).body;
+  eq(s1.state, 'qr');
+  ok(/^<svg[^>]*xmlns="http:\/\/www.w3.org\/2000\/svg"[^>]*>[\s\S]*<\/svg>$/.test(s1.qrSvg), 'valid SVG QR code');
+  ok(!s1.qr, 'raw QR string is not needed by the page');
+  conn = { state: 'qr', qr: '2@second-qr-string,xyz' };
+  const s2 = (await api('/api/status')).body;
+  ok(s2.qrSvg && s2.qrSvg !== s1.qrSvg, 'new QR code after it changes');
+  conn = { state: 'open' };
+  eq((await api('/api/status')).body.qrSvg, undefined, 'no QR code once connected');
+
+  writeFileSync(ENV, '# Your number, country code first, no +\nWHATSAPP_PHONE=\nPAUSE_HOURS=3\n');
+  const before = readFileSync(ENV, 'utf8');
+  conn = { state: 'qr', qr: 'x' };
+  for (const bad of ['+447700900123', '44 7700 900123', '447700-900123', 'abc', '', undefined, 123]) {
+    const r = await api('/api/pair', 'POST', { phone: bad });
+    eq(r.status, 400, `bad phone ${JSON.stringify(bad)} rejected`);
+    eq(r.body.field, 'phone');
+  }
+  eq(paired.length, 0, 'adapter not called for bad numbers');
+  eq(readFileSync(ENV, 'utf8'), before, '.env untouched for bad numbers');
+
+  const r = await api('/api/pair', 'POST', { phone: '447700900123' });
+  eq(r.status, 200);
+  eq(r.body.code, 'ABCD1234', 'pairing code returned');
+  deq(paired, ['447700900123'], 'pairing goes through the adapter');
+  const text = readFileSync(ENV, 'utf8');
+  eq(parseEnv(text).WHATSAPP_PHONE, '447700900123', 'number written back to WHATSAPP_PHONE');
+  ok(text.startsWith('# Your number, country code first, no +\n'), 'comment kept');
+  eq(parseEnv(text).PAUSE_HOURS, '3');
+  eq(CFG.phone, '447700900123', 'CFG knows the number too');
+  eq((await api('/api/config')).body.WHATSAPP_PHONE, '447700900123', 'remembered number is offered next time');
+
+  conn = { state: 'open' };
+  const again = await api('/api/pair', 'POST', { phone: '447700900123' });
+  ok(again.status >= 400 && /already connected/i.test(again.body.error), 'pairing refused while connected');
+  eq(paired.length, 1);
+
+  eq((await api('/api/relink', 'POST')).status, 200);
+  eq(relinks, 1, 'relink goes through the adapter');
+  eq((await api('/api/status')).body.state, 'connecting');
 }
 
 /* 未知 API：非 2xx + { error } */
