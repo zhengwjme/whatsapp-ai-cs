@@ -57,8 +57,18 @@ async function start() {
         || m.message?.extendedTextMessage?.text
         || m.message?.imageMessage?.caption
         || m.message?.videoMessage?.caption
+        || m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption   // 与 WAHA 一致：说明文字放进 body
         || '';
-      const msg = { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe };
+      // 非文字类型只归一化、不做判断：有说明文字的按文字走；贴纸、表情回应（stickerMessage / reactionMessage）
+      // 既没 body 也没 media，随后被 shouldReply 丢掉
+      const mm = m.message || {};
+      const media = body ? undefined
+        : mm.audioMessage ? 'voice'
+        : mm.imageMessage ? 'image'
+        : mm.videoMessage || mm.ptvMessage ? 'video'
+        : mm.documentMessage || mm.documentWithCaptionMessage ? 'file'
+        : undefined;
+      const msg = { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe, media };
       if (!shouldReply(msg)) continue;
       void handleIncoming(msg, {   // 内部已兜住异常，不 await 也不会掀掉进程
         typing: () => sock.sendPresenceUpdate('composing', chat),

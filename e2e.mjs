@@ -1,6 +1,6 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
- * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 去重 · 转人工暂停 · io 失败不崩
+ * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 去重 · 转人工暂停 · io 失败不崩
  * 用法：npm run e2e        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
@@ -180,6 +180,26 @@ const handedOff = (chat, io, what) => {
   ok(until >= t0 + 3600e3 && until <= Date.now() + 3600e3, `再次要求人工应重新计满，实际剩 ${until - Date.now()}ms`);
   eq(io5.sent.length, 0, '转人工期内再次要求人工：不重发话术、不回复');
   eq(roles(chat2), 'user,assistant,user,user,user', '转人工期内消息都只记录');
+}
+
+/* 5d) 非文字消息（语音/无说明图片/视频/文件）：类型占位记录 → 发话术 → 转人工，不调模型 */
+{
+  const before = calls.length;
+  for (const [media, label] of [['voice', '[语音]'], ['image', '[图片]'], ['video', '[视频]'], ['file', '[文件]']]) {
+    const io = makeIo(); const chat = `c5d-${media}@s.whatsapp.net`;
+    await handleIncoming({ id: `5d-${media}`, chat, from: chat, body: '', media }, io);
+    eq(io.sent.join('|'), CFG.handoffText, `${media}：客户应收到转人工话术`);
+    ok(pauseUntil(chat) > Date.now(), `${media}：应进入转人工期`);
+    eq(JSON.stringify(historyOf(chat, 20).map(m => [m.role, m.content])),
+      JSON.stringify([['user', label], ['assistant', CFG.handoffText]]), `${media}：先占位记录，再记话术`);
+  }
+  eq(calls.length, before, '非文字消息不调模型');
+
+  // 转人工期内再发非文字：只占位记录
+  const chat = 'c5d-voice@s.whatsapp.net'; const io = makeIo();
+  await handleIncoming({ id: '5d-again', chat, from: chat, body: '', media: 'image' }, io);
+  eq(io.sent.length, 0, '转人工期内非文字消息不回');
+  eq(historyOf(chat, 20).at(-1).content, '[图片]', '转人工期内非文字消息只占位记录');
 }
 
 /* 6) 关键词：正常咨询不能被当成「找人工」（外贸里 "human hair" 是高频词） */

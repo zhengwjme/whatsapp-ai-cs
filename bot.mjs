@@ -23,6 +23,18 @@ async function waha(path, body) {
   return r.status === 204 ? null : r.json().catch(() => null);
 }
 
+/**
+ * 非文字类型归一化（只归一化，不做判断）：有说明文字的按文字走，不给 media；贴纸不给 media（随后被 shouldReply 丢掉）。
+ * 表情回应是单独的 message.reaction 事件，本就不订阅。
+ * media 可能是 null（WAHA 没下载媒体），拿不到 mimetype 时按文件处理：宁可转人工，也别把客户的消息吞了。
+ */
+function mediaOf(p) {
+  if (p.body?.trim() || !p.hasMedia) return undefined;
+  const mime = p.media?.mimetype || '';
+  if (p._data?.message?.stickerMessage || p._data?.type === 'sticker' || mime === 'image/webp') return undefined;   // NOWEB / WEBJS / 兜底
+  return mime.startsWith('audio/') ? 'voice' : mime.startsWith('image/') ? 'image' : mime.startsWith('video/') ? 'video' : 'file';
+}
+
 const MAX_BODY = 1e6;                                         // WAHA 的真实载荷是几 KB，给个上限防打爆内存
 
 const server = createServer((req, res) => {
@@ -39,9 +51,11 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}'); // 立即 200，WAHA 才不重试
     try {
       const { event, payload } = JSON.parse(raw || '{}');
-      if (event === 'message' && shouldReply(payload)) {
+      const msg = event === 'message' && payload
+        && { id: payload.id, chat: payload.from, from: payload.from, body: payload.body, fromMe: payload.fromMe, media: mediaOf(payload) };
+      if (msg && shouldReply(msg)) {
         handleIncoming(
-          { id: payload.id, chat: payload.from, from: payload.from, body: payload.body, fromMe: payload.fromMe },
+          msg,
           {
             typing: () => waha('/api/startTyping', { chatId: payload.from }),
             stopTyping: () => waha('/api/stopTyping', { chatId: payload.from }),

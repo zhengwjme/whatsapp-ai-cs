@@ -42,7 +42,7 @@ const isStatus = jid => jid === 'status@broadcast' || jid.endsWith('@broadcast')
 
 /** 是否该由机器人回这条消息 */
 export function shouldReply(msg, cfg = CFG) {
-  if (!msg || !msg.from || !msg.body?.trim()) return false;
+  if (!msg || !msg.from || (!msg.body?.trim() && !msg.media)) return false;   // 贴纸/表情回应：传输层不给 media，落在这里丢掉
   if (msg.fromMe) return false;                       // 自己发的不回
   if (isStatus(msg.from)) return false;               // 状态/广播
   if (isGroup(msg.from) && !cfg.replyGroups) return false;
@@ -64,6 +64,9 @@ export function wantsHuman(body, cfg = CFG) {
 export function splitHandoff(reply) {
   return { text: reply.replaceAll(HANDOFF_MARK, '').trim(), handoff: reply.includes(HANDOFF_MARK) };
 }
+
+/** 非文字消息在会话历史里的类型占位：模型看不到内容，但知道那里有一条 */
+const MEDIA_LABEL = { voice: '[语音]', image: '[图片]', video: '[视频]', file: '[文件]' };
 
 /** 拟人打字延迟：按字数估算，封顶 6s。ponytail: 固定启发式，被限流再调 */
 export function typingDelay(text, rand = Math.random) {
@@ -137,19 +140,20 @@ const openHandoff = chat => setPause(chat, Date.now() + CFG.pauseHours * 3600e3)
 
 async function run(msg, io) {
   const chat = msg.chat;
+  const content = msg.media ? MEDIA_LABEL[msg.media] : msg.body;
   if (alreadySeen(msg.id)) return;                     // 幂等
   if (pauseUntil(chat) > Date.now()) {                 // 已转人工，只记不答
-    saveMsg(chat, 'user', msg.body);
+    saveMsg(chat, 'user', content);
     if (wantsHuman(msg.body)) openHandoff(chat);       // 再次要求人工：重新计满，话术已发过不再发
     return;
   }
 
-  if (wantsHuman(msg.body)) {
-    saveMsg(chat, 'user', msg.body);
+  if (wantsHuman(msg.body) || msg.media) {             // 客户要求 / 非文字消息（机器人无法回答）
+    saveMsg(chat, 'user', content);
     return handoff(chat, io);
   }
 
-  saveMsg(chat, 'user', msg.body);                     // 先落库：LLM 挂掉也不丢客户这句话
+  saveMsg(chat, 'user', content);                      // 先落库：LLM 挂掉也不丢客户这句话
   await io.typing();
   try {
     let reply;
@@ -172,7 +176,8 @@ async function run(msg, io) {
 }
 
 /**
- * @param msg {{id: string, chat: string, from: string, body: string, fromMe?: boolean}}
+ * @param msg {{id: string, chat: string, from: string, body: string, fromMe?: boolean, media?: 'voice'|'image'|'video'|'file'}}
+ *   media 只给无说明的非文字消息；带说明的图片/视频由传输层把说明放进 body、不带 media
  * @param io  {{send(text): Promise, typing(): Promise, stopTyping?(): Promise}}
  * @returns {Promise<void>} 永不 reject（调用方漏 await 也不会掀掉进程）
  */
@@ -194,6 +199,7 @@ export function selftest() {
   eq(shouldReply({ from: '123@g.us', body: 'hi' }, { ...CFG, replyGroups: true }), true);
   eq(shouldReply({ from: 'status@broadcast', body: 'x' }), false);
   eq(shouldReply({ from: 'a@s.whatsapp.net', body: '   ' }), false);
+  eq(shouldReply({ from: 'a@s.whatsapp.net', body: '', media: 'voice' }), true);
   eq(wantsHuman('我要转人工'), true);
   eq(wantsHuman('what is the price'), false);
   // 转人工关键词不能误伤正常咨询（外贸里 "human hair" 是高频词 → 默认不给裸 human）
