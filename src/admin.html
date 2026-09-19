@@ -24,7 +24,9 @@
   .last { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
   .hand { color: var(--warn); font-size: 12px; }
   #detail { overflow-y: auto; padding: 16px; }
-  #detail h2 { font-size: 15px; margin: 0 0 12px; }
+  #detail h2 { font-size: 15px; margin: 0 0 8px; }
+  .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+  button:disabled { opacity: .45; cursor: default; }
   .msg { max-width: 70ch; margin: 6px 0; padding: 6px 10px; border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
   .msg.user { background: var(--user); } .msg.assistant { background: var(--bot); margin-left: 40px; } .msg.operator { background: var(--op); margin-left: 40px; }
   .who { font-size: 12px; font-weight: 600; color: var(--muted); }
@@ -47,17 +49,19 @@ const T = {
   en: { title: 'WhatsApp Bot Admin', switch: '中文', open: 'Connected', connecting: 'Reconnecting…', qr: 'Login required',
         loggedOut: 'Logged out', offline: 'Admin server unreachable', noChats: 'No chats yet', pick: 'Select a chat to see its history',
         user: 'Customer', assistant: 'Bot', operator: 'Operator', more: 'Load more', bot: 'Bot is replying',
-        left: (h, m) => `Handoff · ${h}h ${m}m left` },
+        left: (h, m) => `Handoff · ${h}h ${m}m left`, handoff: 'Hand off to human', rehandoff: 'Restart handoff timer',
+        resume: 'Resume bot', failed: 'Action failed' },
   zh: { title: 'WhatsApp 机器人管理', switch: 'English', open: '已连接', connecting: '断线重连中', qr: '需要登录',
         loggedOut: '已登出', offline: '管理服务无法访问', noChats: '还没有会话', pick: '选择一个会话查看历史',
         user: '客户', assistant: '机器人', operator: '运营', more: '加载更多', bot: '机器人接待中',
-        left: (h, m) => `转人工中 · 剩 ${h} 小时 ${m} 分` },
+        left: (h, m) => `转人工中 · 剩 ${h} 小时 ${m} 分`, handoff: '手动转人工', rehandoff: '重新计满转人工期',
+        resume: '恢复接待', failed: '操作失败' },
 };
 let lang = 'en';
 try { lang = localStorage.getItem('lang') === 'zh' ? 'zh' : 'en'; } catch {}
 const t = k => T[lang][k];
 
-let state = 'connecting', chats = [], openChat = null, msgs = [], hasMore = false;
+let state = 'connecting', chats = [], openChat = null, msgs = [], hasMore = false, actFailed = false;
 const PAGE = 200;
 
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -69,7 +73,7 @@ const handoff = until => {
   const mins = Math.ceil(ms / 60e3);
   return t('left')(Math.floor(mins / 60), mins % 60);
 };
-const get = async path => { const r = await fetch(path); if (!r.ok) throw new Error((await r.json()).error); return r.json(); };
+const get = async (path, method) => { const r = await fetch(path, { method }); if (!r.ok) throw new Error((await r.json()).error); return r.json(); };
 const historyUrl = (chat, before) => `/api/chats/${encodeURIComponent(chat)}/messages` + (before ? `?before=${before}` : '');
 
 function render() {
@@ -96,6 +100,16 @@ function render() {
   const detail = document.getElementById('detail');
   if (!openChat) return detail.replaceChildren(el('p', 'empty', t('pick')));
   const nodes = [el('h2', null, phone(openChat))];
+  const left = handoff(chats.find(c => c.chat === openChat)?.until || 0);
+  const acts = el('div', 'actions');
+  const handoffBtn = el('button', null, t(left ? 'rehandoff' : 'handoff'));
+  const resumeBtn = el('button', null, t('resume'));
+  handoffBtn.onclick = () => act('handoff');
+  resumeBtn.onclick = () => act('resume');
+  resumeBtn.disabled = !left;               // 不在转人工期就没什么可恢复的
+  acts.append(handoffBtn, resumeBtn, el('span', left ? 'hand' : 'muted', left || t('bot')));
+  if (actFailed) acts.append(el('span', 'hand', t('failed')));
+  nodes.push(acts);
   if (hasMore) { const b = el('button', null, t('more')); b.onclick = loadMore; nodes.push(b); }
   for (const m of [...msgs].reverse()) {
     const d = el('div', `msg ${m.role}`);
@@ -123,11 +137,18 @@ async function refresh() {
 }
 
 async function select(chat) {
-  openChat = chat; msgs = []; hasMore = false;
+  openChat = chat; msgs = []; hasMore = false; actFailed = false;
   render();
   await refresh();
   const detail = document.getElementById('detail');
   detail.scrollTop = detail.scrollHeight;
+}
+
+async function act(action) {             // 手动转人工 / 恢复接待，做完立刻刷新状态
+  actFailed = false;
+  try { await get(`/api/chats/${encodeURIComponent(openChat)}/${action}`, 'POST'); }
+  catch { actFailed = true; }
+  await refresh();
 }
 
 async function loadMore() {

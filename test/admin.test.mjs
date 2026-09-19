@@ -1,12 +1,42 @@
 /**
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
- * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 未知 API · 端口占用
+ * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 未知 API · 端口占用
  */
+import { createServer } from 'node:http';
 import { rmSync, mkdirSync } from 'node:fs';
 import { DatabaseSync } from 'node:sqlite';
 import { strictEqual as eq, ok, deepStrictEqual as deq, rejects } from 'node:assert';
 
 process.env.DATA_DIR = './data/test-admin';
+process.env.OPENAI_API_KEY = 'test';
+process.env.SYSTEM_PROMPT = 'sys';
+
+/* 假 LLM：回 echo:<最后一句客户话>；hold 非空时挂起，等 hold.release() */
+const calls = [];
+let hold = null;
+const holdLlm = () => {
+  const h = {};
+  h.arrived = new Promise(r => { h.arrive = r; });
+  h.gate = new Promise(r => { h.release = r; });
+  return (hold = h);
+};
+const llm = createServer((req, res) => {
+  let body = '';
+  req.on('data', c => { body += c; });
+  req.on('end', () => {
+    const msgs = JSON.parse(body).messages;
+    calls.push(msgs);
+    const last = msgs.findLast(m => m.role === 'user').content;
+    const reply = () => res.writeHead(200, { 'Content-Type': 'application/json' })
+      .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: `echo:${last}` } }] }));
+    if (!hold) return reply();
+    const h = hold; hold = null;
+    h.arrive(); h.gate.then(reply);
+  });
+});
+await new Promise(r => llm.listen(0, '127.0.0.1', r));
+process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
+
 rmSync('./data/test-admin', { recursive: true, force: true });
 { // 旧库：只有旧表和旧数据，启动时要自动补上昵称表
   mkdirSync('./data/test-admin', { recursive: true });
@@ -15,17 +45,19 @@ rmSync('./data/test-admin', { recursive: true, force: true });
     INSERT INTO msg VALUES('old@s.whatsapp.net', 'user', 'from before', ${Date.now()});`);
   old.close();
 }
-const { handleIncoming, saveMsg, setPause } = await import('../src/lib.mjs');
+const { CFG, handleIncoming, saveMsg, setPause, pauseUntil, historyOf } = await import('../src/lib.mjs');
 const { startAdmin } = await import('../src/admin.mjs');
 
 let conn = { state: 'connecting' };
 const server = await startAdmin({ port: 0, conn: { status: () => conn } });
 const { address, port } = server.address();
 eq(address, '127.0.0.1', 'admin must only listen on localhost');
-const api = async path => {
-  const r = await fetch(`http://127.0.0.1:${port}${path}`);
+const api = async (path, method = 'GET') => {
+  const r = await fetch(`http://127.0.0.1:${port}${path}`, { method });
   return { status: r.status, body: await r.json() };
 };
+const chatApi = (chat, action) => api(`/api/chats/${encodeURIComponent(chat)}/${action}`, 'POST');
+const untilIn = async chat => (await api('/api/chats')).body.find(c => c.chat === chat)?.until;
 
 /* 连接状态：如实透传适配器 */
 for (const state of ['connecting', 'open', 'qr', 'loggedOut']) {
@@ -34,7 +66,13 @@ for (const state of ['connecting', 'open', 'qr', 'loggedOut']) {
 }
 
 /* 会话列表：最后一条消息摘要和时间、转人工期到期时间，按最后一条消息倒序 */
-const io = { typing: async () => {}, send: async () => `s-${Math.random()}` };
+const makeIo = () => {
+  const io = { sent: [], stopped: 0, typing: async () => {} };
+  io.stopTyping = async () => { io.stopped++; };
+  io.send = async t => { io.sent.push(t); return `s-${Math.random()}`; };
+  return io;
+};
+const io = makeIo();
 const a = 'a@s.whatsapp.net', b = 'b@s.whatsapp.net';
 saveMsg(a, 'user', 'hello from a');
 saveMsg(b, 'user', 'hello from b');
@@ -85,6 +123,53 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
   eq(small.length, 5, 'limit respected');
 }
 
+/* 手动转人工：客户察觉不到（不发话术、不写历史）；之后客户消息只记不答；再点重新计满 */
+{
+  const e = 'e@s.whatsapp.net', io = makeIo();
+  await handleIncoming({ id: 'e-1', chat: e, from: e, body: 'Q1' }, io);
+  eq(io.sent.join('|'), 'echo:Q1');
+  const t0 = Date.now();
+  const r = await chatApi(e, 'handoff');
+  eq(r.status, 200);
+  ok(r.body.until >= t0 + CFG.pauseHours * 3600e3, 'window uses the configured length');
+  eq(await untilIn(e), r.body.until, 'list shows the handoff window');
+  eq(io.sent.length, 1, 'manual handoff sends nothing to the customer');
+  eq(historyOf(e, 20).map(m => m.role).join(','), 'user,assistant', 'manual handoff writes no history');
+  await handleIncoming({ id: 'e-2', chat: e, from: e, body: 'Q2' }, io);
+  eq(io.sent.length, 1, 'customer messages are only logged during the window');
+
+  setPause(e, Date.now() + 60e3);                      // 快到期时再点：从此刻重新计满
+  const t1 = Date.now();
+  ok((await chatApi(e, 'handoff')).body.until >= t1 + CFG.pauseHours * 3600e3, 'handoff again refills the window');
+
+  /* 恢复接待：不发任何消息；之后机器人回复，并能看到转人工期间客户和运营的发言 */
+  await handleIncoming({ id: 'e-op', chat: e, from: e, body: 'operator: order shipped', fromMe: true }, io);
+  eq((await chatApi(e, 'resume')).status, 200);
+  eq(io.sent.length, 1, 'resume sends nothing to the customer');
+  eq(await untilIn(e), 0, 'list shows the bot is back');
+  await handleIncoming({ id: 'e-3', chat: e, from: e, body: 'Q3' }, io);
+  eq(io.sent.join('|'), 'echo:Q1|echo:Q3', 'bot replies after resume');
+  const ctx = calls.at(-1).map(m => m.content);
+  ok(ctx.includes('Q2') && ctx.includes('operator: order shipped'), `model sees what was said during the window: ${ctx}`);
+
+  eq((await chatApi('nobody@s.whatsapp.net', 'resume')).status, 200, 'resume outside a window is fine');
+}
+
+/* 竞态：模型生成期间手动转人工 → 放行后回复不发、不记 */
+{
+  const f = 'f@s.whatsapp.net', io = makeIo();
+  const h = holdLlm();
+  const p = handleIncoming({ id: 'f-1', chat: f, from: f, body: 'Qf' }, io);
+  await h.arrived;
+  await chatApi(f, 'handoff');
+  h.release();
+  await p;
+  eq(io.sent.length, 0, 'reply is dropped after a manual handoff');
+  eq(historyOf(f, 20).map(m => m.role).join(','), 'user', 'dropped reply is not logged');
+  eq(io.stopped, 1, 'typing indicator stopped');
+  ok(pauseUntil(f) > Date.now());
+}
+
 /* 未知 API：非 2xx + { error } */
 {
   const { status, body } = await api('/api/nope');
@@ -105,3 +190,5 @@ await rejects(startAdmin({ port, conn: { status: () => conn } }), { code: 'EADDR
 
 setPause(b, 0);
 server.close();
+llm.closeAllConnections();
+llm.close();

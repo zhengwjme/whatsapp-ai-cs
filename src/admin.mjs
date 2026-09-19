@@ -4,7 +4,7 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
-import { listChats, historyPage } from './lib.mjs';
+import { listChats, historyPage, openHandoff, resume } from './lib.mjs';
 
 const PAGE = readFileSync(new URL('./admin.html', import.meta.url));
 
@@ -19,15 +19,18 @@ export function startAdmin({ port, conn }) {
     if (!url.pathname.startsWith('/api/')) return res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(PAGE);
     const json = (status, body) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
     try {
-      const hist = url.pathname.match(/^\/api\/chats\/([^/]+)\/messages$/);
-      if (req.method !== 'GET') return json(405, { error: 'method not allowed' });
-      if (url.pathname === '/api/status') return json(200, { state: conn.status().state });
-      if (url.pathname === '/api/chats') return json(200, listChats());
-      if (hist) {
-        const q = url.searchParams;
-        return json(200, historyPage(decodeURIComponent(hist[1]), +q.get('before') || undefined, +q.get('limit') || undefined));
+      const route = `${req.method} ${url.pathname.replace(/^\/api\/chats\/[^/]+\//, '/api/chats/:chat/')}`;
+      const chat = decodeURIComponent(url.pathname.split('/')[3] || '');
+      const q = url.searchParams;
+      switch (route) {
+        case 'GET /api/status': return json(200, { state: conn.status().state });
+        case 'GET /api/chats': return json(200, listChats());
+        case 'GET /api/chats/:chat/messages':
+          return json(200, historyPage(chat, +q.get('before') || undefined, +q.get('limit') || undefined));
+        case 'POST /api/chats/:chat/handoff': return json(200, { until: openHandoff(chat) });   // 手动转人工
+        case 'POST /api/chats/:chat/resume': resume(chat); return json(200, {});             // 恢复接待
+        default: return json(404, { error: 'not found' });
       }
-      json(404, { error: 'not found' });
     } catch (e) {
       json(500, { error: e.message });
     }

@@ -164,8 +164,18 @@ async function say(chat, io, text) {
   return true;
 }
 
-/** 开启或重新计满转人工期：到期时间总是「此刻 + 时长」 */
-const openHandoff = chat => setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
+/**
+ * 开启或重新计满转人工期：到期时间总是「此刻 + 时长」，返回到期时刻。
+ * 管理界面的手动转人工直接调它：不发话术、不写历史，也不排队——正在生成的回复由 say() 的复查拦下
+ */
+export const openHandoff = chat => {
+  const until = Date.now() + CFG.pauseHours * 3600e3;
+  setPause(chat, until);
+  return until;
+};
+
+/** 恢复接待：提前结束转人工期。不发消息、不写历史，客户下一条由机器人照常回复 */
+export const resume = chat => db.prepare('DELETE FROM pause WHERE chat_id=?').run(chat);
 
 async function run(msg, io) {
   const chat = msg.chat;
