@@ -7,11 +7,14 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { join } from 'node:path';
+import { exec } from 'node:child_process';
 import { shouldReply, handleIncoming, CFG } from './lib.mjs';
 import { normalize } from './normalize.mjs';
+import { startAdmin } from './admin.mjs';
 
 const AUTH_DIR = join(CFG.dataDir, 'baileys-auth');
 let pairingRequested = false;
+let conn = { state: 'connecting' };   // 连接适配器的当前状态：connecting | open | qr（附 qr 原始串）| loggedOut
 
 // 静音 Baileys 的内置 pino 日志，终端只留我们自己的输出（老 Windows 控制台更友好）
 const quiet = new Proxy({}, { get: () => () => quiet });
@@ -27,6 +30,7 @@ async function start() {
 
   sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
     if (qr) {
+      conn = { state: 'qr', qr };
       if (CFG.phone && !pairingRequested && !sock.authState.creds.registered) {
         pairingRequested = true;
         try {
@@ -37,9 +41,13 @@ async function start() {
         qrcode.generate(qr, { small: true });
       }
     }
-    if (connection === 'open') console.log('Connected to WhatsApp, auto-reply is running');
+    if (connection === 'open') {
+      conn = { state: 'open' };
+      console.log('Connected to WhatsApp, auto-reply is running');
+    }
     if (connection === 'close') {
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
+      conn = { state: loggedOut ? 'loggedOut' : 'connecting' };
       console.log(loggedOut ? 'Logged out. Delete data/baileys-auth and log in again' : 'Connection lost, reconnecting in 5 seconds…');
       if (!loggedOut) setTimeout(start, 5000);
     }
@@ -63,3 +71,13 @@ async function start() {
 }
 
 start().catch(e => { console.error('Failed to start:', e); process.exit(1); });
+
+// 管理界面起不来不影响机器人收发消息
+startAdmin({ port: CFG.adminPort, conn: { status: () => conn } }).then(() => {
+  const url = `http://127.0.0.1:${CFG.adminPort}`;
+  console.log(`Admin page: ${url}`);
+  const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
+  exec(cmd, () => {});                                  // 打不开浏览器就算了，地址已打印
+}, e => console.error(e.code === 'EADDRINUSE'
+  ? `Admin page not started: port ${CFG.adminPort} is already in use. Set ADMIN_PORT in .env to another port (e.g. 3001) and restart. The bot keeps running.`
+  : `Admin page not started: ${e.message}. The bot keeps running.`));

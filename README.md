@@ -104,6 +104,7 @@ schtasks /create /tn WhatsAppBot /tr "cmd /c cd /d C:\whatsapp-ai-cs && npm star
 | `REPLY_GROUPS` | | `true` to also reply in group chats. Default `false` |
 | `DEBUG` | | `1` adds stack traces to error logs |
 | `DATA_DIR` | | Where data is stored. Default `./data` |
+| `ADMIN_PORT` | | Port of the admin page (http://127.0.0.1:PORT, this computer only). Default 3000 |
 
 After changing `.env`, close the bot window and run `npm start` again.
 
@@ -169,6 +170,7 @@ Use phrases, not single words. `human` on its own would match "humane", and `age
 ├── src/
 │   ├── lib.mjs          Core: filtering, dedup, context, AI call, handoff
 │   ├── bot.mjs          WhatsApp connection (Baileys)
+│   ├── admin.mjs        Admin page server (localhost only) + admin.html
 │   └── normalize.mjs    Raw WhatsApp message → core message
 ├── scripts/sim.mjs      Terminal simulator
 ├── test/                node --test suites

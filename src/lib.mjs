@@ -29,6 +29,7 @@ export const CFG = {
   handoffText: process.env.HANDOFF_TEXT || "Thanks for your patience. I'm passing you to a member of our team, who'll reply shortly.",
   debug: process.env.DEBUG === '1',                       // 失败日志带调用栈
   phone: process.env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
+  adminPort: num(process.env.ADMIN_PORT, 3000),   // 管理界面端口（只绑 127.0.0.1）
 };
 
 /* ---------- 纯逻辑 ---------- */
@@ -94,6 +95,15 @@ export const saveMsg = (chat, role, content) =>
 /** 最近 n 条。按 rowid（插入顺序）取，不能按 ts：一问一答常落在同一毫秒，ts 排序会把回答排到提问前面 */
 export const historyOf = (chat, n) =>
   db.prepare('SELECT role, content FROM msg WHERE chat_id=? ORDER BY rowid DESC LIMIT ?').all(chat, n).reverse();
+/** 管理界面的会话列表：每个会话最后一条消息的摘要和时间、转人工期到期时间，最新的在前 */
+export const listChats = () => db.prepare(`
+  SELECT m.chat_id AS chat, substr(m.content, 1, 120) AS last, m.ts, COALESCE(p.until, 0) AS until
+  FROM msg m JOIN (SELECT MAX(rowid) AS r FROM msg GROUP BY chat_id) l ON m.rowid = l.r
+  LEFT JOIN pause p ON p.chat_id = m.chat_id
+  ORDER BY m.rowid DESC`).all();
+/** 管理界面的历史分页：按插入顺序倒序，before 是上一页最后一条的 id */
+export const historyPage = (chat, before = Number.MAX_SAFE_INTEGER, limit = 200) =>
+  db.prepare('SELECT rowid AS id, role, content, ts FROM msg WHERE chat_id=? AND rowid<? ORDER BY rowid DESC LIMIT ?').all(chat, before, limit);
 export const pauseUntil = chat => db.prepare('SELECT until FROM pause WHERE chat_id=?').get(chat)?.until || 0;
 export const setPause = (chat, until) =>
   db.prepare('INSERT INTO pause(chat_id, until) VALUES(?,?) ON CONFLICT(chat_id) DO UPDATE SET until=excluded.until').run(chat, until);
