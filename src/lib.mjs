@@ -127,23 +127,27 @@ const chains = new Map();   // 同客户串行：连发两条时，第二条必�
 
 /**
  * 统一的转人工动作：发话术 → 以机器人身份记入历史 → 开启转人工期。
- * 话术先发出去：发失败就抛出、不开窗口，客户下一条还有机会被回
+ * 话术先发出去：发失败就抛出、不开窗口，客户下一条还有机会被回。
+ * 会话已在转人工期（生成期间被别处转了人工）则 say 作废，窗口也不动
  */
 async function handoff(chat, io) {
-  await say(chat, io, CFG.handoffText);
-  openHandoff(chat);
+  if (await say(chat, io, CFG.handoffText)) openHandoff(chat);
 }
 
 /**
- * 机器人发言：发出 → 记下发送 id（回显靠它识别）→ 以机器人身份入历史。
+ * 机器人发言：复查转人工期 → 发出 → 记下发送 id（回显靠它识别）→ 以机器人身份入历史。
+ * 复查是因为 LLM 生成和拟人延迟期间，会话可能已被排队之外的动作（如手动转人工）转了人工：
+ * 已在转人工期就丢弃这条（不发、不记），返回 false。
  * ponytail: 发送其实成功、但请求超时/报错时拿不到 id，那条的回显会被当成运营接管（该会话误转人工，往安全的方向错）。
  * 真遇到再按「会话 + 内容」短时匹配兜底
  */
 async function say(chat, io, text) {
+  if (pauseUntil(chat) > Date.now()) return false;
   const id = await io.send(text);
   if (id) markSent(id);
   else console.warn('[send] transport returned no message id; its echo will be treated as an operator takeover', chat);   // 传输层接错了要吵出来
   saveMsg(chat, 'assistant', text);
+  return true;
 }
 
 /** 开启或重新计满转人工期：到期时间总是「此刻 + 时长」 */

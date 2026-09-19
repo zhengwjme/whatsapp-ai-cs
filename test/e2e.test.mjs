@@ -1,6 +1,6 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
- * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 运营接管 · 去重 · 转人工暂停 · io 失败不崩
+ * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 运营接管 · 去重 · 转人工暂停 · 发言前复查转人工期 · io 失败不崩
  * 用法：npm test        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
@@ -18,6 +18,13 @@ rmSync('./data/e2e', { recursive: true, force: true });   // 每次全新库，�
 
 let mode = 'ok';                                          // ok | fail | hang | empty | mark | markOnly
 const calls = [];                                         // 每次调用的 messages 快照
+let hold = null;                                          // 非空时假 LLM 收到请求后挂起，等 hold.release()
+const holdLlm = () => {
+  const h = {};
+  h.arrived = new Promise(r => { h.arrive = r; });
+  h.gate = new Promise(r => { h.release = r; });
+  return (hold = h);
+};
 const llm = createServer((req, res) => {
   let body = '';
   req.on('data', c => { body += c; });
@@ -28,8 +35,11 @@ const llm = createServer((req, res) => {
     if (mode === 'hang') return;                          // 永不响应，用来测超时
     const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
     const content = { empty: '  ', mark: `echo:${last}\n${HANDOFF_MARK}`, markOnly: HANDOFF_MARK }[mode] ?? `echo:${last}`;
-    res.writeHead(200, { 'Content-Type': 'application/json' })
+    const reply = () => res.writeHead(200, { 'Content-Type': 'application/json' })
       .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
+    if (!hold) return reply();
+    const h = hold; hold = null;
+    h.arrive(); h.gate.then(reply);
   });
 });
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
@@ -270,6 +280,26 @@ const handedOff = (chat, io, what) => {
   try { await handleIncoming({ id: '8-q', chat, from: chat, body: 'Q8' }, io); } finally { console.warn = warn; }
   eq(io.sent.join('|'), 'echo:Q8', 'still replies without an id');
   ok(warned.some(w => w.includes('[send]') && w.includes(chat)), `missing id must warn: ${JSON.stringify(warned)}`);
+}
+
+/* 9) 发言前复查转人工期：模型生成期间会话进入转人工期（任何来源，这里直接写窗口模拟排队外的手动转人工）→ 回复作废 */
+{
+  for (const m of ['ok', 'mark']) {
+    mode = m;
+    const io = makeIo(); const chat = `c9-${m}@s.whatsapp.net`;
+    const h = holdLlm();
+    const p = handleIncoming({ id: `9-${m}`, chat, from: chat, body: 'Q9' }, io);
+    await h.arrived;
+    const until = Date.now() + 3600e3;
+    setPause(chat, until);
+    h.release();
+    await p;
+    eq(io.sent.length, 0, `${m}: reply generated before the window opened must not be sent`);
+    eq(roles(chat), 'user', `${m}: dropped reply must not be logged`);
+    eq(io.stopped, 1, `${m}: typing indicator must be stopped`);
+    eq(pauseUntil(chat), until, `${m}: window is left as is`);
+  }
+  mode = 'ok';
 }
 
 llm.closeAllConnections();   // fetch 是 keep-alive，不关连接脚本退不出去
