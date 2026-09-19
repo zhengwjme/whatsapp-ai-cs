@@ -1,14 +1,15 @@
 /**
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
- * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 未知 API · 端口占用
+ * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 配置读写 · 未知 API · 端口占用
  */
 import { createServer } from 'node:http';
-import { rmSync, mkdirSync } from 'node:fs';
+import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
+import { parseEnv } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
 import { strictEqual as eq, ok, deepStrictEqual as deq, rejects } from 'node:assert';
 
 process.env.DATA_DIR = './data/test-admin';
-process.env.OPENAI_API_KEY = 'test';
+process.env.OPENAI_API_KEY = 'sk-test-123456789';
 process.env.SYSTEM_PROMPT = 'sys';
 
 /* 假 LLM：回 echo:<最后一句客户话>；hold 非空时挂起，等 hold.release() */
@@ -59,7 +60,8 @@ const adapter = {
     return `op-${outbox.length}`;
   },
 };
-const server = await startAdmin({ port: 0, conn: adapter });
+const ENV = './data/test-admin/.env';
+const server = await startAdmin({ port: 0, conn: adapter, envFile: ENV });
 const { address, port } = server.address();
 eq(address, '127.0.0.1', 'admin must only listen on localhost');
 const api = async (path, method = 'GET', body) => {
@@ -231,6 +233,88 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
   eq(historyOf(k, 20).map(m => `${m.role}:${m.content}`).join('|'), 'user:Qk|assistant:echo:Qk|operator:op after bot', 'queue order kept');
 }
 
+/* 配置读写：写回 .env（只改对应行，注释和无关行保留）、立即生效、Key 不回明文、整体校验 */
+{
+  const original = [
+    '# --- AI model ---',
+    'OPENAI_BASE_URL=https://api.example.com/v1',
+    'OPENAI_API_KEY=sk-secret-123456789',
+    'LLM_TIMEOUT_MS=30000                  # Per-call timeout in ms',
+    '',
+    'SYSTEM_PROMPT="old line 1',
+    'old line 2"',
+    'UNRELATED=keep me # and my comment',
+    'PAUSE_HOURS=1',
+    '',
+  ].join('\r\n');                                         // 记事本存的是 CRLF
+  writeFileSync(ENV, original);
+  const cfgApi = body => api('/api/config', body ? 'POST' : 'GET', body);
+
+  const got = (await cfgApi()).body;
+  ok(!JSON.stringify(got).includes('sk-test-123456789'), 'API key is never returned in plain text');
+  eq(got.OPENAI_API_KEY.set, true);
+  ok(got.OPENAI_API_KEY.masked.endsWith('6789'), 'masked key');
+  ok(Array.isArray(got.PAUSE_KEYWORD) && typeof got.REPLY_GROUPS === 'boolean');
+
+  const prompt = 'You sell baths. Prices from £199 — it\'s "cheap" #1.\nIf unsure, end with [[HANDOFF]].';
+  const good = {
+    SYSTEM_PROMPT: prompt, HANDOFF_TEXT: 'A colleague will reply shortly — £0 extra.', PAUSE_KEYWORD: ['need a human', 'call me back'],
+    PAUSE_HOURS: 2, HISTORY_TURNS: 8, REPLY_GROUPS: false, OPENAI_BASE_URL: process.env.OPENAI_BASE_URL,
+    OPENAI_API_KEY: '', OPENAI_MODEL: 'fake-2', LLM_TIMEOUT_MS: 5000,
+  };
+
+  // 非法值：整体拒绝，指出字段，.env 一个字节都不动
+  for (const [field, bad] of [['PAUSE_HOURS', -1], ['PAUSE_HOURS', 'abc'], ['HISTORY_TURNS', 0], ['LLM_TIMEOUT_MS', ''],
+    ['REPLY_GROUPS', 'yes'], ['OPENAI_BASE_URL', 'ftp://x'], ['OPENAI_BASE_URL', 'not a url'], ['PAUSE_KEYWORD', []]]) {
+    const r = await cfgApi({ ...good, [field]: bad });
+    eq(r.status, 400, `${field}=${JSON.stringify(bad)} rejected`);
+    eq(r.body.field, field, `error names ${field}`);
+    eq(readFileSync(ENV, 'utf8'), original, `.env untouched after invalid ${field}`);
+  }
+
+  // 修改时长前先有一个转人工期：保存后它的到期时间不变
+  const w = 'w@s.whatsapp.net';
+  const oldUntil = (await chatApi(w, 'handoff')).body.until;
+
+  const r = await cfgApi(good);
+  eq(r.status, 200);
+  ok(!r.body.warning, 'no warning when [[HANDOFF]] is present');
+  const text = readFileSync(ENV, 'utf8');
+  const env = parseEnv(text);
+  eq(env.SYSTEM_PROMPT, prompt, 'multi-line prompt with £, quotes and # round-trips through Node --env-file rules');
+  eq(env.HANDOFF_TEXT, good.HANDOFF_TEXT, 'missing key appended');
+  eq(env.PAUSE_KEYWORD, 'need a human,call me back');
+  eq(env.OPENAI_API_KEY, 'sk-secret-123456789', 'blank API key leaves the key unchanged');
+  eq(env.UNRELATED, 'keep me', 'unrelated key kept');
+  ok(text.startsWith('# --- AI model ---\r\n'), 'comment kept');
+  ok(text.includes('UNRELATED=keep me # and my comment\r\n'), 'unrelated line kept byte for byte');
+  ok(text.includes('LLM_TIMEOUT_MS=5000                  # Per-call timeout in ms'), 'inline comment kept');
+  ok(!text.includes('old line'), 'old multi-line value fully replaced');
+  ok(text.includes('\r\n\r\n'), 'blank lines kept');
+
+  // 立即生效：新 SYSTEM_PROMPT、新关键词、新转人工期时长
+  eq(pauseUntil(w), oldUntil, 'existing handoff window unchanged by the new PAUSE_HOURS');
+  const t0 = Date.now();
+  ok((await chatApi('w2@s.whatsapp.net', 'handoff')).body.until >= t0 + 2 * 3600e3, 'new windows use the new length');
+  const x = 'x@s.whatsapp.net', io = makeIo();
+  await handleIncoming({ id: 'x-1', chat: x, from: x, body: 'hello' }, io);
+  eq(calls.at(-1)[0].content, prompt, 'next LLM call uses the new SYSTEM_PROMPT');
+  await handleIncoming({ id: 'x-2', chat: x, from: x, body: 'please CALL ME BACK' }, io);
+  eq(io.sent.at(-1), good.HANDOFF_TEXT, 'new keyword and handoff text take effect at once');
+
+  // 新 Key 写入；缺 [[HANDOFF]] 照常保存但带警告
+  const r2 = await cfgApi({ ...good, SYSTEM_PROMPT: 'no marker here', OPENAI_API_KEY: 'sk-new-abcdefgh' });
+  eq(r2.status, 200);
+  ok(r2.body.warning?.includes('[[HANDOFF]]'), 'warning when [[HANDOFF]] is missing');
+  eq(parseEnv(readFileSync(ENV, 'utf8')).OPENAI_API_KEY, 'sk-new-abcdefgh', 'new API key saved');
+  eq(parseEnv(readFileSync(ENV, 'utf8')).SYSTEM_PROMPT, 'no marker here');
+
+  // .env 不存在就新建
+  rmSync(ENV);
+  eq((await cfgApi({ PAUSE_HOURS: 3 })).status, 200);
+  eq(parseEnv(readFileSync(ENV, 'utf8')).PAUSE_HOURS, '3', '.env created when missing');
+}
+
 /* 未知 API：非 2xx + { error } */
 {
   const { status, body } = await api('/api/nope');
@@ -247,7 +331,7 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
 }
 
 /* 端口被占用：启动失败要抛出，交给调用方提示 */
-await rejects(startAdmin({ port, conn: adapter }), { code: 'EADDRINUSE' });
+await rejects(startAdmin({ port, conn: adapter, envFile: ENV }), { code: 'EADDRINUSE' });
 
 setPause(b, 0);
 server.close();

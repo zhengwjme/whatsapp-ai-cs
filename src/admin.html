@@ -36,12 +36,22 @@
   .msg.user { background: var(--user); } .msg.assistant { background: var(--bot); margin-left: 40px; } .msg.operator { background: var(--op); margin-left: 40px; }
   .who { font-size: 12px; font-weight: 600; color: var(--muted); }
   .empty { color: var(--muted); padding: 16px; }
+  nav button.on { background: var(--sel); }
+  [hidden] { display: none !important; }
+  #settings { max-width: 820px; margin: 0 auto; padding: 16px; height: calc(100vh - 49px); overflow-y: auto; }
+  #settings label { display: block; margin: 14px 0 4px; font-weight: 600; }
+  #settings .hint { font-weight: 400; color: var(--muted); font-size: 12px; }
+  #settings input:not([type=checkbox]), #settings textarea { width: 100%; font: inherit; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; }
+  #settings .bad { border-color: var(--bad) !important; outline: 1px solid var(--bad); }
+  #settings .save { display: flex; align-items: center; gap: 12px; margin: 18px 0 32px; }
+  .okmsg { color: var(--ok); } .warnmsg { color: var(--warn); } .errmsg { color: var(--bad); }
   @media (max-width: 700px) { main { grid-template-columns: 1fr; height: auto; } #list { max-height: 40vh; border-right: 0; } }
 </style>
 </head>
 <body>
 <header>
   <h1 data-t="title"></h1>
+  <nav><button id="tabChats" data-t="chats"></button> <button id="tabSettings" data-t="settings"></button></nav>
   <span id="status" class="badge"></span>
   <button id="lang"></button>
 </header>
@@ -55,6 +65,24 @@
     </form>
   </section>
 </main>
+<form id="settings" hidden>
+  <label><span data-t="f_SYSTEM_PROMPT"></span> <span class="hint" data-t="h_SYSTEM_PROMPT"></span>
+    <textarea name="SYSTEM_PROMPT" rows="14"></textarea></label>
+  <label><span data-t="f_HANDOFF_TEXT"></span> <span class="hint" data-t="h_HANDOFF_TEXT"></span>
+    <textarea name="HANDOFF_TEXT" rows="2"></textarea></label>
+  <label><span data-t="f_PAUSE_KEYWORD"></span> <span class="hint" data-t="h_PAUSE_KEYWORD"></span>
+    <textarea name="PAUSE_KEYWORD" rows="5"></textarea></label>
+  <label><span data-t="f_PAUSE_HOURS"></span> <input name="PAUSE_HOURS" type="number" min="0" step="any"></label>
+  <label><span data-t="f_HISTORY_TURNS"></span> <span class="hint" data-t="h_HISTORY_TURNS"></span>
+    <input name="HISTORY_TURNS" type="number" min="1" step="1"></label>
+  <label><input name="REPLY_GROUPS" type="checkbox"> <span data-t="f_REPLY_GROUPS"></span></label>
+  <label><span data-t="f_OPENAI_BASE_URL"></span> <input name="OPENAI_BASE_URL" type="url"></label>
+  <label><span data-t="f_OPENAI_API_KEY"></span> <span class="hint" data-t="h_OPENAI_API_KEY"></span>
+    <input name="OPENAI_API_KEY" type="password" autocomplete="off"></label>
+  <label><span data-t="f_OPENAI_MODEL"></span> <input name="OPENAI_MODEL"></label>
+  <label><span data-t="f_LLM_TIMEOUT_MS"></span> <input name="LLM_TIMEOUT_MS" type="number" min="1" step="1"></label>
+  <div class="save"><button type="submit" data-t="save"></button><span id="saveNote"></span></div>
+</form>
 <script>
 const T = {
   en: { title: 'WhatsApp Bot Admin', switch: '中文', open: 'Connected', connecting: 'Reconnecting…', qr: 'Login required',
@@ -62,13 +90,33 @@ const T = {
         user: 'Customer', assistant: 'Bot', operator: 'Operator', more: 'Load more', bot: 'Bot is replying',
         left: (h, m) => `Handoff · ${h}h ${m}m left`, handoff: 'Hand off to human', rehandoff: 'Restart handoff timer',
         resume: 'Resume bot', failed: 'Action failed', send: 'Send', sending: 'Sending…', placeholder: 'Reply to the customer (counts as operator takeover)',
-        notConnected: 'WhatsApp is not connected, cannot send', sendFailed: 'Not sent: ' },
+        notConnected: 'WhatsApp is not connected, cannot send', sendFailed: 'Not sent: ',
+        chats: 'Chats', settings: 'Settings', save: 'Save', saved: 'Saved. The bot uses the new settings now.',
+        invalid: 'Please fix this field: ', saveFailed: 'Not saved: ',
+        f_SYSTEM_PROMPT: 'What the bot knows and how it talks (SYSTEM_PROMPT)', h_SYSTEM_PROMPT: 'Keep the [[HANDOFF]] instruction',
+        f_HANDOFF_TEXT: 'Handoff message', h_HANDOFF_TEXT: 'Sent to the customer when a chat is handed to a human',
+        f_PAUSE_KEYWORD: 'Phrases that ask for a human', h_PAUSE_KEYWORD: 'One phrase per line, not case-sensitive. Use phrases, not single words',
+        f_PAUSE_HOURS: 'Hours the bot stays quiet after a handoff', f_HISTORY_TURNS: 'Recent messages sent to the model',
+        h_HISTORY_TURNS: 'A question and its answer count as 2', f_REPLY_GROUPS: 'Also reply in group chats',
+        f_OPENAI_BASE_URL: 'Model API address', f_OPENAI_API_KEY: 'API key', h_OPENAI_API_KEY: 'Leave blank to keep the current key',
+        f_OPENAI_MODEL: 'Model name', f_LLM_TIMEOUT_MS: 'Model timeout (ms)', keySet: 'Current: ', keyUnset: 'Not set',
+        noMark: 'SYSTEM_PROMPT no longer mentions [[HANDOFF]], so the bot will never hand a chat over when it cannot answer.' },
   zh: { title: 'WhatsApp 机器人管理', switch: 'English', open: '已连接', connecting: '断线重连中', qr: '需要登录',
         loggedOut: '已登出', offline: '管理服务无法访问', noChats: '还没有会话', pick: '选择一个会话查看历史',
         user: '客户', assistant: '机器人', operator: '运营', more: '加载更多', bot: '机器人接待中',
         left: (h, m) => `转人工中 · 剩 ${h} 小时 ${m} 分`, handoff: '手动转人工', rehandoff: '重新计满转人工期',
         resume: '恢复接待', failed: '操作失败', send: '发送', sending: '发送中…', placeholder: '回复客户（视为运营接管）',
-        notConnected: 'WhatsApp 未连接，无法发送', sendFailed: '没发出去：' },
+        notConnected: 'WhatsApp 未连接，无法发送', sendFailed: '没发出去：',
+        chats: '会话', settings: '配置', save: '保存', saved: '已保存，机器人已按新配置工作。',
+        invalid: '请修改这一项：', saveFailed: '没保存：',
+        f_SYSTEM_PROMPT: '机器人知道什么、怎么说话（SYSTEM_PROMPT）', h_SYSTEM_PROMPT: '保留 [[HANDOFF]] 约定',
+        f_HANDOFF_TEXT: '转人工话术', h_HANDOFF_TEXT: '转人工时发给客户的话',
+        f_PAUSE_KEYWORD: '转人工关键词', h_PAUSE_KEYWORD: '每行一个，不分大小写；用词组，别用单个词',
+        f_PAUSE_HOURS: '转人工期时长（小时）', f_HISTORY_TURNS: '发给模型的会话历史条数',
+        h_HISTORY_TURNS: '一问一答算 2 条', f_REPLY_GROUPS: '也回复群聊',
+        f_OPENAI_BASE_URL: '模型地址', f_OPENAI_API_KEY: 'API Key', h_OPENAI_API_KEY: '留空表示不改',
+        f_OPENAI_MODEL: '模型名', f_LLM_TIMEOUT_MS: '模型超时（毫秒）', keySet: '当前：', keyUnset: '未设置',
+        noMark: 'SYSTEM_PROMPT 里没有 [[HANDOFF]] 约定，机器人答不上来时不会再转人工。' },
 };
 let lang = 'en';
 try { lang = localStorage.getItem('lang') === 'zh' ? 'zh' : 'en'; } catch {}
@@ -203,10 +251,72 @@ async function loadMore() {
   detail.scrollTop = detail.scrollHeight - fromBottom;   // 往前翻时保持当前位置
 }
 
+/* ---------- 配置页：打开时读一次，不随轮询刷新（免得冲掉正在改的内容） ---------- */
+const form = document.getElementById('settings');
+let keyMasked = '';
+
+function showTab(settings) {
+  document.querySelector('main').hidden = settings;
+  form.hidden = !settings;
+  document.getElementById('tabChats').className = settings ? '' : 'on';
+  document.getElementById('tabSettings').className = settings ? 'on' : '';
+  if (settings) loadSettings();
+}
+
+async function loadSettings() {
+  note('', '');
+  const c = await get('/api/config').catch(() => null);
+  if (!c) return note('errmsg', t('offline'));
+  for (const [k, v] of Object.entries(c)) {
+    const input = form.elements[k];
+    if (k === 'OPENAI_API_KEY') { input.value = ''; keyMasked = v.set ? v.masked : ''; }
+    else if (k === 'PAUSE_KEYWORD') input.value = v.join('\n');
+    else if (input.type === 'checkbox') input.checked = v;
+    else input.value = v;
+  }
+  renderKeyHint();
+}
+
+function renderKeyHint() {
+  form.elements.OPENAI_API_KEY.placeholder = keyMasked ? t('keySet') + keyMasked : t('keyUnset');
+}
+
+function note(cls, text) {
+  const n = document.getElementById('saveNote');
+  n.className = cls; n.textContent = text;
+}
+
+form.onsubmit = async e => {
+  e.preventDefault();
+  form.querySelectorAll('.bad').forEach(i => i.classList.remove('bad'));
+  const body = {};
+  for (const input of form.querySelectorAll('[name]')) {
+    body[input.name] = input.type === 'checkbox' ? input.checked
+      : input.name === 'PAUSE_KEYWORD' ? input.value.split('\n').map(k => k.trim()).filter(Boolean)
+      : input.value;
+  }
+  const r = await fetch('/api/config', { method: 'POST', body: JSON.stringify(body) }).catch(() => null);
+  const res = r && await r.json().catch(() => ({}));
+  if (!r) return note('errmsg', t('offline'));
+  if (res.field && form.elements[res.field]) {
+    form.elements[res.field].classList.add('bad');
+    form.elements[res.field].focus();
+    return note('errmsg', t('invalid') + t(`f_${res.field}`));
+  }
+  if (!r.ok) return note('errmsg', t('saveFailed') + res.error);
+  await loadSettings();
+  note(res.warning ? 'warnmsg' : 'okmsg', res.warning ? `${t('saved')} ⚠ ${t('noMark')}` : t('saved'));
+};
+
+document.getElementById('tabChats').onclick = () => showTab(false);
+document.getElementById('tabSettings').onclick = () => showTab(true);
+showTab(false);
+
 document.getElementById('lang').onclick = () => {
   lang = lang === 'en' ? 'zh' : 'en';
   try { localStorage.setItem('lang', lang); } catch {}
   render();
+  renderKeyHint();
 };
 refresh();
 setInterval(refresh, 3000);

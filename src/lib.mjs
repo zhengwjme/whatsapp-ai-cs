@@ -15,22 +15,25 @@ export const num = (v, d) => {
 /** 机器人无法回答的约定标记：只有代码和默认 SYSTEM_PROMPT 知道，不做配置项 */
 export const HANDOFF_MARK = '[[HANDOFF]]';
 
-export const CFG = {
-  dataDir: process.env.DATA_DIR || './data',
-  baseUrl: (process.env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
-  apiKey: process.env.OPENAI_API_KEY || '',
-  model: process.env.OPENAI_MODEL || 'deepseek-chat',
-  system: process.env.SYSTEM_PROMPT || `You are a customer service assistant for a UK business. Reply in concise, friendly British English; if the customer writes in another language, reply in that language. Answer the question first, then ask about their needs. Never make things up: answer what you can, and if you can't answer something, end your reply with ${HANDOFF_MARK}. Never say you are transferring them yourself.`,
-  replyGroups: process.env.REPLY_GROUPS === 'true',
-  history: num(process.env.HISTORY_TURNS, 12),
-  pauseKeyword: (process.env.PAUSE_KEYWORD || 'speak to a human,real person,human agent,speak to someone,talk to someone').split(',').map(s => s.trim()).filter(Boolean),
-  pauseHours: num(process.env.PAUSE_HOURS, 12),
-  llmTimeout: num(process.env.LLM_TIMEOUT_MS, 30000),
-  handoffText: process.env.HANDOFF_TEXT || "Thanks for your patience. I'm passing you to a member of our team, who'll reply shortly.",
-  debug: process.env.DEBUG === '1',                       // 失败日志带调用栈
-  phone: process.env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
-  adminPort: num(process.env.ADMIN_PORT, 3000),   // 管理界面端口（只绑 127.0.0.1）
-};
+/** 环境变量 → 配置。启动时读一次；管理界面保存配置后用同一套规则重算，保证解析一致 */
+export const loadCfg = env => ({
+  dataDir: env.DATA_DIR || './data',
+  baseUrl: (env.OPENAI_BASE_URL || 'https://api.deepseek.com/v1').replace(/\/$/, ''),
+  apiKey: env.OPENAI_API_KEY || '',
+  model: env.OPENAI_MODEL || 'deepseek-chat',
+  system: env.SYSTEM_PROMPT || `You are a customer service assistant for a UK business. Reply in concise, friendly British English; if the customer writes in another language, reply in that language. Answer the question first, then ask about their needs. Never make things up: answer what you can, and if you can't answer something, end your reply with ${HANDOFF_MARK}. Never say you are transferring them yourself.`,
+  replyGroups: env.REPLY_GROUPS === 'true',
+  history: num(env.HISTORY_TURNS, 12),
+  pauseKeyword: (env.PAUSE_KEYWORD || 'speak to a human,real person,human agent,speak to someone,talk to someone').split(',').map(s => s.trim()).filter(Boolean),
+  pauseHours: num(env.PAUSE_HOURS, 12),
+  llmTimeout: num(env.LLM_TIMEOUT_MS, 30000),
+  handoffText: env.HANDOFF_TEXT || "Thanks for your patience. I'm passing you to a member of our team, who'll reply shortly.",
+  debug: env.DEBUG === '1',                       // 失败日志带调用栈
+  phone: env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
+  adminPort: num(env.ADMIN_PORT, 3000),   // 管理界面端口（只绑 127.0.0.1）
+});
+
+export const CFG = loadCfg(process.env);
 
 /* ---------- 纯逻辑 ---------- */
 const isGroup = jid => jid.endsWith('@g.us');

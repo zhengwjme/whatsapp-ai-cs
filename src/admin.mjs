@@ -5,17 +5,18 @@
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { listChats, historyPage, openHandoff, resume, operatorSend } from './lib.mjs';
+import { readConfig, saveConfig } from './config.mjs';
 
 const PAGE = readFileSync(new URL('./admin.html', import.meta.url));
 
 /**
- * @param opts {{port: number, conn: {
+ * @param opts {{port: number, envFile: string, conn: {
  *   status(): {state: 'connecting'|'open'|'qr'|'loggedOut', qr?: string},
  *   send(chat: string, text: string): Promise<string|undefined>}}}
- *   conn 是传输层注入的连接适配器；send 以本号身份发文字、返回消息 id
+ *   conn 是传输层注入的连接适配器；send 以本号身份发文字、返回消息 id；envFile 是配置写回的 .env 路径
  * @returns {Promise<import('node:http').Server>} 监听失败（如端口被占用）时 reject
  */
-export function startAdmin({ port, conn }) {
+export function startAdmin({ port, conn, envFile }) {
   const server = createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/')) return res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(PAGE);
@@ -41,6 +42,14 @@ export function startAdmin({ port, conn }) {
             return json(502, { error: `send failed: ${e.message}` });
           }
         }
+        case 'GET /api/config': return json(200, readConfig());
+        case 'POST /api/config':
+          try {
+            return json(200, saveConfig(envFile, await readJson(req)));
+          } catch (e) {
+            if (e.field) return json(400, { error: e.message, field: e.field });
+            throw e;
+          }
         default: return json(404, { error: 'not found' });
       }
     } catch (e) {

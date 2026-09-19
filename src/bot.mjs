@@ -79,7 +79,7 @@ const adapter = {
   status: () => conn,
   send: async (chat, text) => (await current.sendMessage(chat, { text }))?.key?.id,   // 运营在管理界面回复客户
 };
-startAdmin({ port: CFG.adminPort, conn: adapter }).then(() => {
+startAdmin({ port: CFG.adminPort, conn: adapter, envFile: '.env' }).then(() => {
   const url = `http://127.0.0.1:${CFG.adminPort}`;
   console.log(`Admin page: ${url}`);
   const cmd = process.platform === 'win32' ? `start "" "${url}"` : process.platform === 'darwin' ? `open "${url}"` : `xdg-open "${url}"`;
