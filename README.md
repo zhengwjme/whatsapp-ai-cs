@@ -176,7 +176,7 @@ curl http://localhost:8787/health        # 应输出 ok
 | `PAUSE_KEYWORD` | | 默认 `人工,转人工,human agent,real person`（只加词组，别加裸词 `human`） |
 | `PAUSE_HOURS` | | 转人工后暂停多久，默认 12 |
 | `HISTORY_TURNS` | | 带最近几条消息，默认 12（一问一答算 2 条） |
-| `LLM_TIMEOUT_MS` | | 单次模型调用超时，默认 30000 毫秒；超时按失败处理，不会把客户一直晾着 |
+| `LLM_TIMEOUT_MS` | | 单次模型调用超时，默认 30000 毫秒；超时、报错或返回空内容都按机器人无法回答处理：发转人工话术并进入转人工期，不会把客户一直晾着 |
 | `DEBUG` | | 设 `1` 时失败日志带调用栈，默认关 |
 | `REPLY_GROUPS` | | 群聊是否也回，默认 false |
 | `HANDOFF_TEXT` | | 转人工时的回话 |
@@ -204,7 +204,7 @@ OPENAI_API_KEY=ollama
 |---|---|
 | `npm run sim` | 假客户模拟器：终端里跑完「判定→上下文→LLM→回发」，不用手机 |
 | `npm run selftest` | 纯逻辑自检（过滤 / 关键词边界 / 延迟 / 环境变量兜底 / 上下文顺序） |
-| `npm run e2e` | 离线端到端自检：起假 LLM，不联网不花钱（并发串行 · 超时 · 失败不崩 · 转人工） |
+| `npm run e2e` | 离线端到端自检：起假 LLM，不联网不花钱（并发串行 · 模型报错/超时/空内容即转人工 · 转人工） |
 | `npm run e2e:waha` | WAHA 传输层自检：假 WAHA + 假 LLM 起真的 `bot.mjs`（路由 · 413 · 失败不崩） |
 | `npm run login` / `npm run start:baileys` | 扫码登录 / 启动（Baileys 直连） |
 | `npm start` | 启动 WAHA 传输（需 Docker） |

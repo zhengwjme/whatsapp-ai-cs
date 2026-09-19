@@ -1,6 +1,6 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
- * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时不吃掉消息 · 去重 · 转人工暂停 · io 失败不崩
+ * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 去重 · 转人工暂停 · io 失败不崩
  * 用法：npm run e2e        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
@@ -16,7 +16,7 @@ process.env.PAUSE_HOURS = '1';
 process.env.SYSTEM_PROMPT = 'sys';
 rmSync('./data/e2e', { recursive: true, force: true });   // 每次全新库，免得消息 id 撞上去重表
 
-let mode = 'ok';                                          // ok | fail | hang
+let mode = 'ok';                                          // ok | fail | hang | empty
 const calls = [];                                         // 每次调用的 messages 快照
 const llm = createServer((req, res) => {
   let body = '';
@@ -27,8 +27,9 @@ const llm = createServer((req, res) => {
     if (mode === 'fail') return res.writeHead(500).end('boom');
     if (mode === 'hang') return;                          // 永不响应，用来测超时
     const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
+    const content = mode === 'empty' ? '  ' : `echo:${last}`;
     res.writeHead(200, { 'Content-Type': 'application/json' })
-      .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: `echo:${last}` } }] }));
+      .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
   });
 });
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
@@ -79,26 +80,39 @@ const roles = chat => historyOf(chat, 20).map(m => m.role).join(',');
   eq(io.sent.length, 0, '重复 id 不能重复回复');
 }
 
-/* 3) LLM 500：不崩，且客户这句话仍要落库 */
+/* 3) 模型调用失败即转人工（归为机器人无法回答）：客户收到话术、进入转人工期、这句话不吞 */
+const handedOff = (chat, io, what) => {
+  eq(io.sent.join('|'), CFG.handoffText, `${what}：客户应收到转人工话术`);
+  ok(pauseUntil(chat) > Date.now(), `${what}：应进入转人工期`);
+  eq(JSON.stringify(historyOf(chat, 20).map(m => [m.role, m.content])),
+    JSON.stringify([['user', `Q-${what}`], ['assistant', CFG.handoffText]]),
+    `${what}：历史里依次是客户消息、转人工话术`);
+  eq(io.stopped, 1, `${what}：也要收掉「正在输入」`);
+};
 {
   mode = 'fail';
   const io = makeIo(); const chat = 'c3@s.whatsapp.net';
-  await handleIncoming({ id: '3', chat, from: chat, body: 'Q3' }, io);
-  eq(io.sent.length, 0, '失败不发送');
-  eq(roles(chat), 'user', '失败也要留下用户消息');
+  await handleIncoming({ id: '3', chat, from: chat, body: 'Q-报错' }, io);
+  handedOff(chat, io, '报错');
+  mode = 'ok';
+}
+{
+  mode = 'empty';
+  const io = makeIo(); const chat = 'c3b@s.whatsapp.net';
+  await handleIncoming({ id: '3b', chat, from: chat, body: 'Q-空内容' }, io);
+  handedOff(chat, io, '空内容');
   mode = 'ok';
 }
 
-/* 4) LLM 挂住：超时按失败走，不把客户一直晾着 */
+/* 4) LLM 挂住：超时按失败走（尽快转人工），不把客户一直晾着 */
 {
   mode = 'hang';
   const io = makeIo(); const chat = 'c4@s.whatsapp.net';
   const t0 = Date.now();
-  await handleIncoming({ id: '4', chat, from: chat, body: 'Q4' }, io);
+  await handleIncoming({ id: '4', chat, from: chat, body: 'Q-超时' }, io);
   const dt = Date.now() - t0;
   ok(dt >= 900 && dt < 5000, `超时后应尽快失败，实际 ${dt}ms`);
-  eq(io.sent.length, 0, '超时不发送');
-  eq(io.stopped, 1, '超时也要收掉「正在输入」');
+  handedOff(chat, io, '超时');
   mode = 'ok';
 }
 

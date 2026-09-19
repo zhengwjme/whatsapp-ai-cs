@@ -137,7 +137,13 @@ async function run(msg, io) {
   saveMsg(chat, 'user', msg.body);                     // 先落库：LLM 挂掉也不丢客户这句话
   await io.typing();
   try {
-    const reply = await askLLM(chat);                  // 先拿回复，再按字数拟人延迟发送
+    let reply;
+    try {
+      reply = await askLLM(chat);                      // 先拿回复，再按字数拟人延迟发送
+    } catch (e) {                                      // 报错/超时/空内容 = 机器人无法回答，别把客户晾着
+      console.error('[llm failed]', chat, CFG.debug ? (e.stack || e.message) : e.message);
+      return await handoff(chat, io);
+    }
     await sleep(typingDelay(reply));
     await io.send(reply);
     saveMsg(chat, 'assistant', reply);
