@@ -1,8 +1,6 @@
 /**
  * 大脑：与传输方式无关的全部逻辑（判定 / 上下文 / LLM / 去重 / 转人工）。
- * 两种传输复用本文件：
- *   bot.mjs          —— WAHA HTTP（有 Docker 时用）
- *   bot-baileys.mjs  —— Baileys 直连（Windows 装不了 Docker/WSL 时用）
+ * 传输层见 bot-baileys.mjs（Baileys 直连）。
  * 自检：node lib.mjs --selftest        离线端到端：node e2e.mjs
  */
 import { DatabaseSync } from 'node:sqlite';
@@ -31,7 +29,6 @@ export const CFG = {
   pauseHours: num(process.env.PAUSE_HOURS, 12),
   llmTimeout: num(process.env.LLM_TIMEOUT_MS, 30000),
   handoffText: process.env.HANDOFF_TEXT || '已为您转接人工，稍后回复您。',
-  wahaTimeout: num(process.env.WAHA_TIMEOUT_MS, 15000),   // 仅 WAHA 传输用：HTTP 调用超时
   debug: process.env.DEBUG === '1',                       // 失败日志带调用栈
   phone: process.env.WHATSAPP_PHONE || '',   // Baileys 配对码用（带国家码，无 +）
 };

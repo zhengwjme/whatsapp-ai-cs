@@ -147,7 +147,7 @@ const handedOff = (chat, io, what) => {
   // 5a) 话术发不出去 → 不静默，下一条照常回（否则客户既没收到话术、又被晾 12 小时）
   const chat = 'c5@s.whatsapp.net';
   const bad = makeIo();
-  bad.send = async () => { throw new Error('WAHA /api/sendText 500'); };
+  bad.send = async () => { throw new Error('send 500'); };
   await handleIncoming({ id: '5', chat, from: chat, body: '我要转人工' }, bad);
   eq(pauseUntil(chat), 0, '话术没发出去就不该静默');
   eq(roles(chat), 'user', '话术没发出去就不该记进历史');

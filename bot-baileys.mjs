@@ -1,10 +1,8 @@
 /**
- * 传输 B：Baileys 直连（**不需要 Docker / 不需要 WSL**，只要 Node ≥ 22.13）。
- * Windows 版本低装不了 Docker Desktop 时走这条。
+ * 传输层：Baileys 直连（只要 Node ≥ 22.13，不需要 Docker）。
  *
  * 装依赖：npm install
- * 登录：  npm run login        （终端出二维码，或用 WHATSAPP_PHONE 要配对码）
- * 启动：  node bot-baileys.mjs
+ * 登录并启动：npm start        （首次终端出二维码，或用 WHATSAPP_PHONE 要配对码）
  * 自检：  node bot-baileys.mjs --selftest
  */
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
@@ -74,7 +72,7 @@ function normalize(m) {
     || m.message?.extendedTextMessage?.text
     || m.message?.imageMessage?.caption
     || m.message?.videoMessage?.caption
-    || m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption   // 与 WAHA 一致：说明文字放进 body
+    || m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption   // 说明文字放进 body
     || '';
   // 非文字类型只归一化、不做判断：有说明文字的按文字走；贴纸、表情回应（stickerMessage / reactionMessage）
   // 既没 body 也没 media，随后被 shouldReply 丢掉
