@@ -11,7 +11,7 @@
     "start": "node --env-file-if-exists=.env bot.mjs",
     "start:baileys": "node --env-file-if-exists=.env bot-baileys.mjs",
     "login": "node --env-file-if-exists=.env bot-baileys.mjs",
-    "selftest": "node lib.mjs --selftest",
+    "selftest": "node bot-baileys.mjs --selftest",
     "e2e": "node e2e.mjs",
     "e2e:waha": "node e2e-waha.mjs",
     "docker": "docker compose up -d --build",

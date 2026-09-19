@@ -10,9 +10,10 @@
 import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { join } from 'node:path';
+import { strictEqual as eq } from 'node:assert';
 import { shouldReply, handleIncoming, selftest, CFG } from './lib.mjs';
 
-if (process.argv.includes('--selftest')) { selftest(); process.exit(0); }
+if (process.argv.includes('--selftest')) { selftest(); normalizeSelftest(); process.exit(0); }
 
 const AUTH_DIR = join(CFG.dataDir, 'baileys-auth');
 let pairingRequested = false;
@@ -54,23 +55,8 @@ async function start() {
     // 本号经 sock.sendMessage 发出的回显是 append（emitOwnEvents），到不了这里；万一到了，也会被已发送 id 认出来
     if (type !== 'notify') return;
     for (const m of messages) {
-      const chat = m.key.remoteJid;
-      const body = m.message?.conversation
-        || m.message?.extendedTextMessage?.text
-        || m.message?.imageMessage?.caption
-        || m.message?.videoMessage?.caption
-        || m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption   // 与 WAHA 一致：说明文字放进 body
-        || '';
-      // 非文字类型只归一化、不做判断：有说明文字的按文字走；贴纸、表情回应（stickerMessage / reactionMessage）
-      // 既没 body 也没 media，随后被 shouldReply 丢掉
-      const mm = m.message || {};
-      const media = body ? undefined
-        : mm.audioMessage ? 'voice'
-        : mm.imageMessage ? 'image'
-        : mm.videoMessage || mm.ptvMessage ? 'video'
-        : mm.documentMessage || mm.documentWithCaptionMessage ? 'file'
-        : undefined;
-      const msg = { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe, media };
+      const msg = normalize(m);
+      const { chat } = msg;
       if (!shouldReply(msg)) continue;
       void handleIncoming(msg, {   // 内部已兜住异常，不 await 也不会掀掉进程
         typing: () => sock.sendPresenceUpdate('composing', chat),
@@ -79,6 +65,48 @@ async function start() {
       });
     }
   });
+}
+
+/** Baileys 原始消息 → 核心 msg。只归一化，不做判断 */
+function normalize(m) {
+  const chat = m.key.remoteJid;
+  const body = m.message?.conversation
+    || m.message?.extendedTextMessage?.text
+    || m.message?.imageMessage?.caption
+    || m.message?.videoMessage?.caption
+    || m.message?.documentWithCaptionMessage?.message?.documentMessage?.caption   // 与 WAHA 一致：说明文字放进 body
+    || '';
+  // 非文字类型只归一化、不做判断：有说明文字的按文字走；贴纸、表情回应（stickerMessage / reactionMessage）
+  // 既没 body 也没 media，随后被 shouldReply 丢掉
+  const mm = m.message || {};
+  const media = body ? undefined
+    : mm.audioMessage ? 'voice'
+    : mm.imageMessage ? 'image'
+    : mm.videoMessage || mm.ptvMessage ? 'video'
+    : mm.documentMessage || mm.documentWithCaptionMessage ? 'file'
+    : undefined;
+  return { id: m.key.id, chat, from: chat, body, fromMe: m.key.fromMe, media };
+}
+
+/* ---------- 自检：原始消息 → msg 的归一化 ---------- */
+function normalizeSelftest() {
+  const C = '8613@s.whatsapp.net';
+  const raw = (message, fromMe = false) => ({ key: { id: 'X1', remoteJid: C, fromMe }, message });
+  eq(JSON.stringify(normalize(raw({ conversation: 'hi' }))),
+    JSON.stringify({ id: 'X1', chat: C, from: C, body: 'hi', fromMe: false }), '文字消息');
+  eq(normalize(raw({ audioMessage: { ptt: true } })).media, 'voice', '语音');
+  eq(normalize(raw({ imageMessage: {} })).media, 'image', '无说明图片');
+  eq(JSON.stringify(normalize(raw({ imageMessage: { caption: '多少钱' } })).body), '"多少钱"', '带说明图片按文字');
+  eq(normalize(raw({ imageMessage: { caption: '多少钱' } })).media, undefined, '带说明图片不带 media');
+  eq(normalize(raw({ videoMessage: {} })).media, 'video', '无说明视频');
+  eq(normalize(raw({ ptvMessage: {} })).media, 'video', '圆形视频');
+  eq(normalize(raw({ documentMessage: {} })).media, 'file', '文件');
+  eq(normalize(raw({ documentWithCaptionMessage: { message: { documentMessage: { caption: '看附件' } } } })).body, '看附件', '带说明文件按文字');
+  eq(shouldReply(normalize(raw({ stickerMessage: {} }))), false, '贴纸丢弃');
+  eq(shouldReply(normalize(raw({ reactionMessage: { text: '👍' } }))), false, '表情回应丢弃');
+  eq(shouldReply(normalize(raw({ conversation: '我来跟进' }, true))), true, '运营消息交给核心');
+  eq(normalize(raw({ conversation: '我来跟进' }, true)).fromMe, true, '保留 fromMe');
+  console.log('baileys normalize selftest OK');
 }
 
 start().catch(e => { console.error('启动失败:', e); process.exit(1); });

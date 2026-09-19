@@ -261,6 +261,17 @@ const handedOff = (chat, io, what) => {
   ok(!sentToLlm.some(m => m.role === 'operator'), '不能把 operator 角色发给模型');
 }
 
+/* 8) 传输层没返回发送 id：必须吵出来（否则回显会被静默当成运营接管，每条都误转人工） */
+{
+  const chat = 'c8@s.whatsapp.net';
+  const io = makeIo(); io.send = async t => { io.sent.push(t); };   // 接错的传输层：不返回 id
+  const warned = []; const warn = console.warn;
+  console.warn = (...a) => warned.push(a.join(' '));
+  try { await handleIncoming({ id: '8-q', chat, from: chat, body: 'Q8' }, io); } finally { console.warn = warn; }
+  eq(io.sent.join('|'), 'echo:Q8', '没 id 也照常回复');
+  ok(warned.some(w => w.includes('[send]') && w.includes(chat)), `没 id 要告警: ${JSON.stringify(warned)}`);
+}
+
 llm.closeAllConnections();   // fetch 是 keep-alive，不关连接脚本退不出去
 llm.close();
 console.log('e2e OK');
