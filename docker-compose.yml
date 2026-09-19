@@ -8,7 +8,7 @@ services:
     environment:
       WHATSAPP_API_KEY: ${WHATSAPP_API_KEY:-change-me}
       WHATSAPP_HOOK_URL: ${WAHA_HOOK_URL:-http://bot:8787/webhook}
-      WHATSAPP_HOOK_EVENTS: message,session.status
+      WHATSAPP_HOOK_EVENTS: message.any,session.status   # message.any 含本号发出的消息：运营直接回复即接管
   bot:
     build: .                              # 本地构建，无 bind mount（Windows 上 bind mount 又慢又有坑）
     image: whatsapp1-bot:local

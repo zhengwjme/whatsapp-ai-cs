@@ -1,6 +1,6 @@
 /**
  * 离线端到端自检：起一个假 LLM（不联网、不花钱），把传输层之外的整条链路跑一遍。
- * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 去重 · 转人工暂停 · io 失败不崩
+ * 覆盖：同客户并发串行 · 上下文顺序 · LLM 报错/超时/空内容即转人工 · 无法回答标记 · 非文字消息转人工 · 运营接管 · 去重 · 转人工暂停 · io 失败不崩
  * 用法：npm run e2e        （数据落在 data/e2e，不碰 data/bot.db）
  */
 import { createServer } from 'node:http';
@@ -38,11 +38,12 @@ process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
 const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman } = await import('./lib.mjs');
 eq(CFG.baseUrl, process.env.OPENAI_BASE_URL);
 
+let sentSeq = 0;
 const makeIo = () => {
   const io = { sent: [], typed: 0, stopped: 0 };
   io.typing = async () => { io.typed++; };
   io.stopTyping = async () => { io.stopped++; };
-  io.send = async t => { io.sent.push(t); };
+  io.send = async t => { io.sent.push(t); return `sent-${++sentSeq}`; };   // 像真传输层一样返回消息 id
   return io;
 };
 const roles = chat => historyOf(chat, 20).map(m => m.role).join(',');
@@ -208,6 +209,56 @@ const handedOff = (chat, io, what) => {
   eq(wantsHuman('humanoid robot?'), false);
   eq(wantsHuman('can I talk to a human agent?'), true);
   eq(wantsHuman('我要转人工'), true);
+}
+
+/* 7) 运营接管：运营亲自发言 → 以运营身份入历史、开启/重新计满转人工期；机器人自己消息的回显不算 */
+{
+  const chat = 'c7@s.whatsapp.net';
+  const io = makeIo();
+  await handleIncoming({ id: '7-q', chat, from: chat, body: 'Q7' }, io);
+  eq(io.sent.join('|'), 'echo:Q7');
+  const echoId = `sent-${sentSeq}`;
+  await handleIncoming({ id: echoId, chat, from: chat, body: 'echo:Q7', fromMe: true }, io);
+  eq(pauseUntil(chat), 0, '机器人回复的回显不算运营接管');
+  eq(roles(chat), 'user,assistant', '回显不重复记入历史');
+
+  // 7a) 机器人接待期间运营插话 → 接管；同 id 重推只记一次
+  await handleIncoming({ id: '7-op', chat, from: chat, body: '我来跟进', fromMe: true }, io);
+  await handleIncoming({ id: '7-op', chat, from: chat, body: '我来跟进', fromMe: true }, io);
+  ok(pauseUntil(chat) > Date.now(), '运营发言应开启转人工期');
+  eq(roles(chat), 'user,assistant,operator', '运营发言以运营身份记入，且去重');
+  eq(io.sent.length, 1, '运营发言不触发回复');
+  await handleIncoming({ id: '7-q2', chat, from: chat, body: '好的' }, io);
+  eq(io.sent.length, 1, '接管后客户消息不再自动回复');
+
+  // 7b) 转人工期内运营再次发言 → 重新计满；运营发非文字 → 类型占位
+  const soon = Date.now() + 60e3;
+  setPause(chat, soon);
+  await handleIncoming({ id: '7-op2', chat, from: chat, body: '', media: 'file', fromMe: true }, io);
+  ok(pauseUntil(chat) > soon + 3000e3, '运营再次发言应重新计满');
+  eq(JSON.stringify(historyOf(chat, 1)[0]), JSON.stringify({ role: 'operator', content: '[文件]' }), '运营非文字消息为类型占位');
+
+  // 7c) 转人工话术的回显同样不算接管
+  const chat2 = 'c7c@s.whatsapp.net'; const io2 = makeIo();
+  await handleIncoming({ id: '7c-q', chat: chat2, from: chat2, body: '转人工' }, io2);
+  setPause(chat2, 0);                                     // 让窗口先失效，看回显会不会把它再打开
+  await handleIncoming({ id: `sent-${sentSeq}`, chat: chat2, from: chat2, body: CFG.handoffText, fromMe: true }, io2);
+  eq(pauseUntil(chat2), 0, '转人工话术的回显不算运营接管');
+  eq(roles(chat2), 'user,assistant', '话术回显不重复记入历史');
+
+  // 7d) 进程重启后迟到的回显仍能识别（新模块实例 = 新进程的内存状态，只剩库里的记录）
+  const fresh = await import('./lib.mjs?restart');
+  const chat3 = 'c7d@s.whatsapp.net'; const io3 = makeIo();
+  await handleIncoming({ id: '7d-q', chat: chat3, from: chat3, body: 'Q7d' }, io3);
+  await fresh.handleIncoming({ id: `sent-${sentSeq}`, chat: chat3, from: chat3, body: 'echo:Q7d', fromMe: true }, io3);
+  eq(pauseUntil(chat3), 0, '重启后迟到的回显也不算接管');
+
+  // 7e) 转人工期结束后：发给模型的历史里运营发言映射为 assistant
+  setPause(chat, 0);
+  await handleIncoming({ id: '7-q3', chat, from: chat, body: '还有问题' }, io);
+  const sentToLlm = calls.at(-1);
+  ok(sentToLlm.some(m => m.role === 'assistant' && m.content === '我来跟进'), `运营发言应以 assistant 发给模型: ${JSON.stringify(sentToLlm)}`);
+  ok(!sentToLlm.some(m => m.role === 'operator'), '不能把 operator 角色发给模型');
 }
 
 llm.closeAllConnections();   // fetch 是 keep-alive，不关连接脚本退不出去

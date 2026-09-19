@@ -9,12 +9,12 @@ process.env.DATA_DIR = process.env.SIM_DATA_DIR || './data/sim';   // 模拟对�
 const { CFG, handleIncoming } = await import('./lib.mjs');
 
 const chat = `sim-${Date.now().toString(36)}@s.whatsapp.net`;      // 每次运行都是新客户，避免上次的「转人工」残留
-let n = 0;
+let n = 0, out = 0;
 
 const io = {
   typing: async () => process.stdout.write('\n  [正在输入…]\n'),
   stopTyping: async () => {},
-  send: async text => console.log(`\n客服> ${text}\n`),
+  send: async text => { console.log(`\n客服> ${text}\n`); return `${chat}#out${++out}`; },   // 像真传输层一样返回 id
 };
 
 console.log(`模拟客户对话 · 模型 ${CFG.model} · ${CFG.baseUrl}`);

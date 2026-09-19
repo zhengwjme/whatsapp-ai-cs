@@ -1,6 +1,6 @@
 /**
  * WAHA 传输层自检：起假 WAHA + 假 LLM，跑**真的** bot.mjs（不联网、不花钱）。
- * 覆盖：健康检查精确路径 · webhook 立即 200 并回发 · 非文字消息归一化 · 超大 body 413 · WAHA 500 不掀掉进程
+ * 覆盖：健康检查精确路径 · webhook 立即 200 并回发 · 非文字消息归一化 · 运营接管与回显（message.any） · 超大 body 413 · WAHA 500 不掀掉进程
  * 用法：npm run e2e:waha
  */
 import { createServer } from 'node:http';
@@ -27,11 +27,14 @@ const waha = createServer((req, res) => {
   let b = '';
   req.on('data', c => { b += c; });
   req.on('end', () => {
+    let out = '{}';
     if (req.url.startsWith('/api/sendText')) {
       if (failSend) return res.writeHead(500).end('down');
-      sends.push(JSON.parse(b).text);
+      const { chatId, text } = JSON.parse(b);
+      sends.push(text);
+      out = JSON.stringify({ id: `true_${chatId}_BOT${sends.length}`, fromMe: true, body: text });   // 真 WAHA 回 WAMessage
     }
-    res.writeHead(200, { 'Content-Type': 'application/json' }).end('{}');
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(out);
   });
 });
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
@@ -85,6 +88,20 @@ try {
   ok(await wait(() => sends.length === 4), `语音、未下载媒体都应转人工: ${JSON.stringify(sends)}`);
   eq(sends.slice(2).join('|'), '已为您转接人工，稍后回复您。|已为您转接人工，稍后回复您。');
   console.log('2b) 非文字消息归一化 OK');
+
+  // 运营接管：订阅 message.any 后本号消息也会推来，from 是本号、to 才是会话
+  const ME = '999@s.whatsapp.net', C = '555@s.whatsapp.net';
+  const any = payload => post(JSON.stringify({ event: 'message.any', payload: { body: '', fromMe: false, ...payload } }));
+  await any({ id: 'w-c1', from: C, to: ME, body: 'Q1' });
+  ok(await wait(() => sends.length === 5), '客户消息经 message.any 也要回');
+  await any({ id: `true_${C}_BOT5`, from: ME, to: C, body: sends[4], fromMe: true, source: 'api' });   // 机器人回复的回显
+  await any({ id: 'w-c2', from: C, to: ME, body: 'Q2' });
+  ok(await wait(() => sends.length === 6), `回显不算接管，客户下一条照常回: ${JSON.stringify(sends)}`);
+  await any({ id: 'true_555_OP1', from: ME, to: C, body: '我来跟进', fromMe: true, source: 'app' });   // 运营从手机回复
+  await any({ id: 'w-c3', from: C, to: ME, body: 'Q3' });
+  await new Promise(r => setTimeout(r, 1500));
+  eq(sends.length, 6, '运营接管后客户消息不再自动回复');
+  console.log('2c) 运营接管与回显识别 OK');
 
   const big = await post('x'.repeat(2e6));                       // 超过 MAX_BODY 的 1MB
   eq(big.status, 413, '超大 body 要 413');

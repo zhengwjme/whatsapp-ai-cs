@@ -40,10 +40,9 @@ export const CFG = {
 const isGroup = jid => jid.endsWith('@g.us');
 const isStatus = jid => jid === 'status@broadcast' || jid.endsWith('@broadcast');
 
-/** 是否该由机器人回这条消息 */
+/** 是否交给核心逻辑处理（fromMe 也交：可能是运营接管，由 run 分辨） */
 export function shouldReply(msg, cfg = CFG) {
   if (!msg || !msg.from || (!msg.body?.trim() && !msg.media)) return false;   // 贴纸/表情回应：传输层不给 media，落在这里丢掉
-  if (msg.fromMe) return false;                       // 自己发的不回
   if (isStatus(msg.from)) return false;               // 状态/广播
   if (isGroup(msg.from) && !cfg.replyGroups) return false;
   return true;
@@ -82,17 +81,22 @@ db.exec(`
   CREATE TABLE IF NOT EXISTS seen(id TEXT PRIMARY KEY, ts INTEGER);      -- 传输层会重试，去重防重复回复
   CREATE TABLE IF NOT EXISTS msg(chat_id TEXT, role TEXT, content TEXT, ts INTEGER);
   CREATE TABLE IF NOT EXISTS pause(chat_id TEXT PRIMARY KEY, until INTEGER);
+  CREATE TABLE IF NOT EXISTS sent(id TEXT PRIMARY KEY, ts INTEGER);      -- 机器人发过的消息 id：回显不能当成运营接管，落库防重启后误判
   CREATE INDEX IF NOT EXISTS idx_msg ON msg(chat_id);                    -- 别让 historyOf 全表扫
 `);
 // 表会一直长，启动时滚一刀。ponytail: 固定保留期，要长期留档就先导出再删
 // 但自检不能有破坏性副作用：`node lib.mjs --selftest` 用的是同一个 DATA_DIR，不许顺手删生产库
 if (!process.argv.includes('--selftest')) {
   db.prepare('DELETE FROM seen WHERE ts < ?').run(Date.now() - 30 * 864e5);
+  db.prepare('DELETE FROM sent WHERE ts < ?').run(Date.now() - 30 * 864e5);
   db.prepare('DELETE FROM msg  WHERE ts < ?').run(Date.now() - 180 * 864e5);
 }
 
 export const alreadySeen = id =>
   db.prepare('INSERT OR IGNORE INTO seen(id, ts) VALUES(?,?)').run(id, Date.now()).changes === 0;
+const markSent = id => db.prepare('INSERT OR IGNORE INTO sent(id, ts) VALUES(?,?)').run(id, Date.now());
+const wasSent = id => !!db.prepare('SELECT 1 FROM sent WHERE id=?').get(id);
+/** role: user = 客户，assistant = 机器人，operator = 运营 */
 export const saveMsg = (chat, role, content) =>
   db.prepare('INSERT INTO msg VALUES(?,?,?,?)').run(chat, role, content, Date.now());
 /** 最近 n 条。按 rowid（插入顺序）取，不能按 ts：一问一答常落在同一毫秒，ts 排序会把回答排到提问前面 */
@@ -110,7 +114,11 @@ export async function askLLM(chat) {
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${CFG.apiKey}` },
     body: JSON.stringify({
       model: CFG.model,
-      messages: [{ role: 'system', content: CFG.system }, ...historyOf(chat, CFG.history)],
+      messages: [
+        { role: 'system', content: CFG.system },
+        // 运营发言对客户而言也是「本号说的话」，映射为 assistant 才兼容所有 OpenAI 兼容接口
+        ...historyOf(chat, CFG.history).map(m => ({ role: m.role === 'operator' ? 'assistant' : m.role, content: m.content })),
+      ],
     }),
     signal: AbortSignal.timeout(CFG.llmTimeout),      // 上游挂住不能把客户一直晾着
   });
@@ -130,9 +138,20 @@ const chains = new Map();   // 同客户串行：连发两条时，第二条必�
  * 话术先发出去：发失败就抛出、不开窗口，客户下一条还有机会被回
  */
 async function handoff(chat, io) {
-  await io.send(CFG.handoffText);
-  saveMsg(chat, 'assistant', CFG.handoffText);
+  await say(chat, io, CFG.handoffText);
   openHandoff(chat);
+}
+
+/**
+ * 机器人发言：发出 → 记下发送 id（回显靠它识别）→ 以机器人身份入历史。
+ * ponytail: 发送其实成功、但请求超时/报错时拿不到 id，那条的回显会被当成运营接管（该会话误转人工，往安全的方向错）。
+ * 真遇到再按「会话 + 内容」短时匹配兜底
+ */
+async function say(chat, io, text) {
+  const id = await io.send(text);
+  if (id) markSent(id);
+  else console.warn('[send] 传输层没返回消息 id：这条的回显会被当成运营接管', chat);   // 传输层接错了要吵出来
+  saveMsg(chat, 'assistant', text);
 }
 
 /** 开启或重新计满转人工期：到期时间总是「此刻 + 时长」 */
@@ -142,6 +161,11 @@ async function run(msg, io) {
   const chat = msg.chat;
   const content = msg.media ? MEDIA_LABEL[msg.media] : msg.body;
   if (alreadySeen(msg.id)) return;                     // 幂等
+  if (msg.fromMe) {                                    // 本号发的：机器人回显忽略，其余是运营接管
+    if (wasSent(msg.id)) return;                       // 同会话串行：回显一定排在 say() 记下 id 之后
+    saveMsg(chat, 'operator', content);
+    return openHandoff(chat);
+  }
   if (pauseUntil(chat) > Date.now()) {                 // 已转人工，只记不答
     saveMsg(chat, 'user', content);
     if (wantsHuman(msg.body)) openHandoff(chat);       // 再次要求人工：重新计满，话术已发过不再发
@@ -166,8 +190,7 @@ async function run(msg, io) {
     const { text, handoff: cannotAnswer } = splitHandoff(reply);
     if (text) {
       await sleep(typingDelay(text));
-      await io.send(text);
-      saveMsg(chat, 'assistant', text);
+      await say(chat, io, text);
     }
     if (cannotAnswer) await handoff(chat, io);         // 答上的先发，答不上的交给人
   } finally {
@@ -178,7 +201,8 @@ async function run(msg, io) {
 /**
  * @param msg {{id: string, chat: string, from: string, body: string, fromMe?: boolean, media?: 'voice'|'image'|'video'|'file'}}
  *   media 只给无说明的非文字消息；带说明的图片/视频由传输层把说明放进 body、不带 media
- * @param io  {{send(text): Promise, typing(): Promise, stopTyping?(): Promise}}
+ * @param io  {{send(text): Promise<string|undefined>, typing(): Promise, stopTyping?(): Promise}}
+ *   send 要返回所发消息的 id：本号消息的回显靠它和运营发言区分
  * @returns {Promise<void>} 永不 reject（调用方漏 await 也不会掀掉进程）
  */
 export function handleIncoming(msg, io) {
@@ -194,7 +218,7 @@ export function handleIncoming(msg, io) {
 /* ---------- 自检 ---------- */
 export function selftest() {
   eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi' }), true);
-  eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi', fromMe: true }), false);
+  eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi', fromMe: true }), true);   // 可能是运营接管，交给 run
   eq(shouldReply({ from: '123@g.us', body: 'hi' }), false);
   eq(shouldReply({ from: '123@g.us', body: 'hi' }, { ...CFG, replyGroups: true }), true);
   eq(shouldReply({ from: 'status@broadcast', body: 'x' }), false);

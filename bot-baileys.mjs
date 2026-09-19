@@ -50,6 +50,8 @@ async function start() {
   });
 
   sock.ev.on('messages.upsert', ({ messages, type }) => {
+    // 运营从手机/其他已关联设备发的消息：在线时是 notify + key.fromMe（离线补推是 append，不处理，同客户消息）。
+    // 本号经 sock.sendMessage 发出的回显是 append（emitOwnEvents），到不了这里；万一到了，也会被已发送 id 认出来
     if (type !== 'notify') return;
     for (const m of messages) {
       const chat = m.key.remoteJid;
@@ -73,7 +75,7 @@ async function start() {
       void handleIncoming(msg, {   // 内部已兜住异常，不 await 也不会掀掉进程
         typing: () => sock.sendPresenceUpdate('composing', chat),
         stopTyping: () => sock.sendPresenceUpdate('paused', chat),
-        send: text => sock.sendMessage(chat, { text }),
+        send: async text => (await sock.sendMessage(chat, { text }))?.key?.id,   // 与回显的 m.key.id 同值
       });
     }
   });

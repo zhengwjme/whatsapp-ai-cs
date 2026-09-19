@@ -51,15 +51,19 @@ const server = createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' }).end('{"ok":true}'); // 立即 200，WAHA 才不重试
     try {
       const { event, payload } = JSON.parse(raw || '{}');
-      const msg = event === 'message' && payload
-        && { id: payload.id, chat: payload.from, from: payload.from, body: payload.body, fromMe: payload.fromMe, media: mediaOf(payload) };
+      // 订阅 message.any 才收得到本号发出的消息（运营接管 / 机器人回显）；本号发的 from 是自己、to 才是会话。
+      // 老配置只订了 message 也照常工作；两个都订时同一条会推两次，由核心按 id 去重
+      const chat = payload?.fromMe ? payload.to : payload?.from;
+      const msg = (event === 'message' || event === 'message.any') && payload
+        && { id: payload.id, chat, from: chat, body: payload.body, fromMe: payload.fromMe, media: mediaOf(payload) };
       if (msg && shouldReply(msg)) {
         handleIncoming(
           msg,
           {
-            typing: () => waha('/api/startTyping', { chatId: payload.from }),
-            stopTyping: () => waha('/api/stopTyping', { chatId: payload.from }),
-            send: text => waha('/api/sendText', { chatId: payload.from, text }),
+            typing: () => waha('/api/startTyping', { chatId: chat }),
+            stopTyping: () => waha('/api/stopTyping', { chatId: chat }),
+            // sendText 回 WAMessage，id 与回显事件的 payload.id 同为 {fromMe}_{chat}_{message_id} 格式
+            send: async text => (await waha('/api/sendText', { chatId: chat, text }))?.id,
           },
         );
       }
