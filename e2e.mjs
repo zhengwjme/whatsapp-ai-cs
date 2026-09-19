@@ -110,6 +110,7 @@ const roles = chat => historyOf(chat, 20).map(m => m.role).join(',');
   bad.send = async () => { throw new Error('WAHA /api/sendText 500'); };
   await handleIncoming({ id: '5', chat, from: chat, body: '我要转人工' }, bad);
   eq(pauseUntil(chat), 0, '话术没发出去就不该静默');
+  eq(roles(chat), 'user', '话术没发出去就不该记进历史');
   const io2 = makeIo();
   await handleIncoming({ id: '6', chat, from: chat, body: '在吗' }, io2);
   eq(io2.sent.join('|'), 'echo:在吗', '没静默，下一条要照常回');
@@ -118,12 +119,15 @@ const roles = chat => historyOf(chat, 20).map(m => m.role).join(',');
   const chat2 = 'c5b@s.whatsapp.net';
   const io3 = makeIo();
   await handleIncoming({ id: '7', chat: chat2, from: chat2, body: '我要转人工' }, io3);
-  eq(io3.sent.length, 1, '应回一句转接话术');
+  eq(io3.sent.join('|'), CFG.handoffText, '应回一句转接话术');
   ok(pauseUntil(chat2) > Date.now(), '话术发成功才暂停');
+  eq(JSON.stringify(historyOf(chat2, 20)),
+    JSON.stringify([{ role: 'user', content: '我要转人工' }, { role: 'assistant', content: CFG.handoffText }]),
+    '历史末尾依次是客户消息、机器人身份的转人工话术');
   const io4 = makeIo();
   await handleIncoming({ id: '8', chat: chat2, from: chat2, body: '在吗' }, io4);
   eq(io4.sent.length, 0, '暂停期内不回');
-  eq(roles(chat2), 'user,user', '暂停期内只记录');
+  eq(roles(chat2), 'user,assistant,user', '转人工期内只记录');
 }
 
 /* 6) 关键词：正常咨询不能被当成「找人工」（外贸里 "human hair" 是高频词） */

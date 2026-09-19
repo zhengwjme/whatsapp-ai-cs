@@ -114,6 +114,16 @@ const chains = new Map();   // 同客户串行：连发两条时，第二条必�
 // ponytail: 队列不设上限——同客户连发 N 条时，最后一条最坏等 N×(LLM 超时 + 6s)。要限流就按 chat 记深度并合并，
 // 现在不做：丢客户消息比排队更糟
 
+/**
+ * 统一的转人工动作：发话术 → 以机器人身份记入历史 → 开启转人工期。
+ * 话术先发出去：发失败就抛出、不开窗口，客户下一条还有机会被回
+ */
+async function handoff(chat, io) {
+  await io.send(CFG.handoffText);
+  saveMsg(chat, 'assistant', CFG.handoffText);
+  setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
+}
+
 async function run(msg, io) {
   const chat = msg.chat;
   if (alreadySeen(msg.id)) return;                     // 幂等
@@ -121,9 +131,7 @@ async function run(msg, io) {
 
   if (wantsHuman(msg.body)) {
     saveMsg(chat, 'user', msg.body);
-    await io.send(CFG.handoffText);                    // 话术先发出去：发失败就别静默，客户下一条还有机会被回
-    setPause(chat, Date.now() + CFG.pauseHours * 3600e3);
-    return;
+    return handoff(chat, io);
   }
 
   saveMsg(chat, 'user', msg.body);                     // 先落库：LLM 挂掉也不丢客户这句话
