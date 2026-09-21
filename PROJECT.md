@@ -19,7 +19,7 @@
 
 ## 技术约束
 
-- Node ≥ 22.13，ESM，零框架；依赖只有 `baileys` 和 `qrcode-terminal`
+- Node ≥ 22.13，ESM，零框架；运行依赖只有 `baileys` 和 `qrcode-terminal`，开发依赖只有 `patch-package`（见 `patches/`）
 - 配置全部走 `.env`（模型地址、密钥、`SYSTEM_PROMPT`、转人工关键词等）
 
 部署与运营细节见 `README.md`。

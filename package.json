@@ -10,10 +10,14 @@
   "scripts": {
     "start": "node --env-file-if-exists=.env src/bot.mjs",
     "test": "node --test",
-    "sim": "node --env-file-if-exists=.env scripts/sim.mjs"
+    "sim": "node --env-file-if-exists=.env scripts/sim.mjs",
+    "postinstall": "patch-package"
   },
   "dependencies": {
-    "baileys": "^7.0.0-rc14",
+    "baileys": "7.0.0-rc14",
     "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "patch-package": "^8.0.1"
   }
 }

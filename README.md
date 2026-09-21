@@ -145,6 +145,7 @@ Use phrases, not single words. `human` on its own would match "humane", and `age
 | A customer asked for a person but the bot kept replying | Reply yourself (this also stops the bot), then add their wording to `PAUSE_KEYWORD` |
 | Pairing code keeps failing | Check the number format (country code first, no `+`). Too many requests in a short time are rate-limited, so wait a few minutes. |
 | `LLM 401` or `LLM 404` in the log | Wrong API key or model name. `OPENAI_BASE_URL` must not end with `/chat/completions`. |
+| Phone says "Check your connection and try again" after scanning | WhatsApp added a `companion_reg_refresh` step to device linking that Baileys does not handle yet. `patches/baileys+7.0.0-rc14.patch` fixes it; make sure `npm install` ran and printed `baileys@7.0.0-rc14 ✔`, then try again. |
 | `node:sqlite` not found | Node.js is older than 22.13. Install Node.js 24. |
 | Phone shows "logged out from another device" | **Stop using that number immediately.** Use **Log out and relink** on the admin page (or delete `data\baileys-auth` and restart) to log in again. Check nobody was sending bulk messages. |
 
@@ -182,4 +183,4 @@ Use phrases, not single words. `human` on its own would match "humane", and `age
 └── data/                Created at runtime: bot.db (chats) + baileys-auth/ (login)
 ```
 
-Dependencies: `baileys` (MIT; its dependency libsignal is GPLv3) and `qrcode-terminal` (Apache-2.0). Check libsignal's copyleft terms before distributing this as a closed-source product.
+Dependencies: `baileys` (MIT; its dependency libsignal is GPLv3) and `qrcode-terminal` (Apache-2.0); `patch-package` (MIT) is a dev dependency that applies `patches/` on install. Check libsignal's copyleft terms before distributing this as a closed-source product.
