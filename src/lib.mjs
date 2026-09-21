@@ -15,6 +15,9 @@ export const num = (v, d) => {
 /** 机器人无法回答的约定标记：只有代码和默认 SYSTEM_PROMPT 知道，不做配置项 */
 export const HANDOFF_MARK = '[[HANDOFF]]';
 
+/** 与业务无关的闲聊（问天气、问日期、打招呼）：照常回一句引导语，连着来才转人工 */
+export const OFFTOPIC_MARK = '[[OFFTOPIC]]';
+
 /** 环境变量 → 配置。启动时读一次；管理界面保存配置后用同一套规则重算，保证解析一致 */
 export const loadCfg = env => ({
   dataDir: env.DATA_DIR || './data',
@@ -26,6 +29,7 @@ export const loadCfg = env => ({
   history: num(env.HISTORY_TURNS, 12),
   pauseKeyword: (env.PAUSE_KEYWORD || 'speak to a human,real person,human agent,speak to someone,talk to someone').split(',').map(s => s.trim()).filter(Boolean),
   pauseHours: num(env.PAUSE_HOURS, 12),
+  offtopicLimit: num(env.OFFTOPIC_LIMIT, 3),   // 连着这么多条闲聊就转人工；之前每条都只回引导语
   llmTimeout: num(env.LLM_TIMEOUT_MS, 30000),
   handoffText: env.HANDOFF_TEXT || "Thanks for your patience. I'm passing you to a member of our team, who'll reply shortly.",
   debug: env.DEBUG === '1',                       // 失败日志带调用栈
@@ -60,7 +64,11 @@ export function wantsHuman(body, cfg = CFG) {
 
 /** 拆出模型回复里的标记：text 是去掉标记后要发给客户的正文（可能为空） */
 export function splitHandoff(reply) {
-  return { text: reply.replaceAll(HANDOFF_MARK, '').trim(), handoff: reply.includes(HANDOFF_MARK) };
+  return {
+    text: reply.replaceAll(HANDOFF_MARK, '').replaceAll(OFFTOPIC_MARK, '').trim(),
+    handoff: reply.includes(HANDOFF_MARK),
+    offTopic: reply.includes(OFFTOPIC_MARK),
+  };
 }
 
 /** 非文字消息在会话历史里的类型占位：模型看不到内容，但知道那里有一条 */
@@ -139,6 +147,8 @@ export async function askLLM(chat) {
 
 /* ---------- 主流程（传输无关） ---------- */
 const chains = new Map();   // 同客户串行：连发两条时，第二条必须看到第一条的上下文
+// 每个会话连着来了几条闲聊。只活在内存：重启后重新数，最坏是客户多聊两句才转人工，不值得为它建表
+const offTopicRuns = new Map();
 // ponytail: 队列不设上限——同客户连发 N 条时，最后一条最坏等 N×(LLM 超时 + 6s)。要限流就按 chat 记深度并合并，
 // 现在不做：丢客户消息比排队更糟
 
@@ -172,13 +182,17 @@ async function say(chat, io, text) {
  * 管理界面的手动转人工直接调它：不发话术、不写历史，也不排队——正在生成的回复由 say() 的复查拦下
  */
 export const openHandoff = chat => {
+  offTopicRuns.delete(chat);
   const until = Date.now() + CFG.pauseHours * 3600e3;
   setPause(chat, until);
   return until;
 };
 
 /** 恢复接待：提前结束转人工期。不发消息、不写历史，客户下一条由机器人照常回复 */
-export const resume = chat => db.prepare('DELETE FROM pause WHERE chat_id=?').run(chat);
+export const resume = chat => {
+  offTopicRuns.delete(chat);
+  db.prepare('DELETE FROM pause WHERE chat_id=?').run(chat);
+};
 
 async function run(msg, io) {
   const chat = msg.chat;
@@ -211,12 +225,17 @@ async function run(msg, io) {
       console.error('[llm failed]', chat, CFG.debug ? (e.stack || e.message) : e.message);
       return await handoff(chat, io);
     }
-    const { text, handoff: cannotAnswer } = splitHandoff(reply);
+    const { text, handoff: cannotAnswer, offTopic } = splitHandoff(reply);
     if (text) {
       await sleep(typingDelay(text));
       await say(chat, io, text);
     }
-    if (cannotAnswer) await handoff(chat, io);         // 答上的先发，答不上的交给人
+    if (cannotAnswer) return await handoff(chat, io);   // 答上的先发，答不上的交给人
+    // 闲聊不转人工：一条无关消息就静默 12 小时，客户接着问正经问题也没人理了。连着来才当成不是来咨询的
+    const runs = offTopic ? (offTopicRuns.get(chat) ?? 0) + 1 : 0;
+    if (runs >= CFG.offtopicLimit) await handoff(chat, io);   // 内部的 openHandoff 会清零
+    else if (runs) offTopicRuns.set(chat, runs);
+    else offTopicRuns.delete(chat);
   } finally {
     await io.stopTyping?.().catch(() => {});           // 失败也要收掉「正在输入」
   }

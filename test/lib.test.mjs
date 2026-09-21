@@ -4,7 +4,7 @@ import { strictEqual as eq, ok } from 'node:assert';
 
 process.env.DATA_DIR = './data/test-lib';
 rmSync('./data/test-lib', { recursive: true, force: true });
-const { CFG, HANDOFF_MARK, shouldReply, wantsHuman, splitHandoff, typingDelay, num, saveMsg, historyOf } = await import('../src/lib.mjs');
+const { CFG, HANDOFF_MARK, OFFTOPIC_MARK, shouldReply, wantsHuman, splitHandoff, typingDelay, num, saveMsg, historyOf } = await import('../src/lib.mjs');
 
 eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi' }), true);
 eq(shouldReply({ from: '8613@s.whatsapp.net', body: 'hi', fromMe: true }), true);   // 可能是运营接管，交给 run
@@ -21,9 +21,10 @@ eq(wantsHuman('humanoid robot?'), false);
 eq(wantsHuman('can I talk to a human agent?'), true);
 eq(wantsHuman('I WANT A REAL PERSON'), true);
 eq(wantsHuman('I need a human', { ...CFG, pauseKeyword: ['human'] }), true);   // 想踩坑可以自己加，配置说了算
-eq(JSON.stringify(splitHandoff('hi')), '{"text":"hi","handoff":false}');
-eq(JSON.stringify(splitHandoff(`partial answer\n${HANDOFF_MARK}`)), '{"text":"partial answer","handoff":true}');
-eq(JSON.stringify(splitHandoff(HANDOFF_MARK)), '{"text":"","handoff":true}');
+eq(JSON.stringify(splitHandoff('hi')), '{"text":"hi","handoff":false,"offTopic":false}');
+eq(JSON.stringify(splitHandoff(`partial answer\n${HANDOFF_MARK}`)), '{"text":"partial answer","handoff":true,"offTopic":false}');
+eq(JSON.stringify(splitHandoff(HANDOFF_MARK)), '{"text":"","handoff":true,"offTopic":false}');
+eq(JSON.stringify(splitHandoff(`nudge ${OFFTOPIC_MARK}`)), '{"text":"nudge","handoff":false,"offTopic":true}');
 ok(typingDelay('') < 1300 && typingDelay('x'.repeat(500)) === 6000, 'typing delay bounds');
 // 环境变量填错要回默认值，不能变 NaN
 eq(num('abc', 12), 12);

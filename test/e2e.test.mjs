@@ -34,7 +34,7 @@ const llm = createServer((req, res) => {
     if (mode === 'fail') return res.writeHead(500).end('boom');
     if (mode === 'hang') return;                          // 永不响应，用来测超时
     const last = [...msgs].reverse().find(m => m.role === 'user')?.content || '';
-    const content = { empty: '  ', mark: `echo:${last}\n${HANDOFF_MARK}`, markOnly: HANDOFF_MARK }[mode] ?? `echo:${last}`;
+    const content = { empty: '  ', mark: `echo:${last}\n${HANDOFF_MARK}`, markOnly: HANDOFF_MARK, offtopic: `nudge:${last} ${OFFTOPIC_MARK}` }[mode] ?? `echo:${last}`;
     const reply = () => res.writeHead(200, { 'Content-Type': 'application/json' })
       .end(JSON.stringify({ choices: [{ message: { role: 'assistant', content } }] }));
     if (!hold) return reply();
@@ -45,7 +45,7 @@ const llm = createServer((req, res) => {
 await new Promise(r => llm.listen(0, '127.0.0.1', r));
 process.env.OPENAI_BASE_URL = `http://127.0.0.1:${llm.address().port}/v1`;
 
-const { CFG, HANDOFF_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman } = await import('../src/lib.mjs');
+const { CFG, HANDOFF_MARK, OFFTOPIC_MARK, handleIncoming, historyOf, pauseUntil, setPause, wantsHuman, resume } = await import('../src/lib.mjs');
 eq(CFG.baseUrl, process.env.OPENAI_BASE_URL);
 
 let sentSeq = 0;
@@ -150,6 +150,35 @@ const handedOff = (chat, io, what) => {
   const leaked = [...io.sent, ...io2.sent, ...historyOf(chat, 20).map(m => m.content), ...historyOf(chat2, 20).map(m => m.content)]
     .filter(t => t.includes(HANDOFF_MARK));
   eq(leaked.length, 0, 'marker must never reach the customer or history');
+}
+
+/* 4b) 闲聊：每条都回引导语、不静默；连着 OFFTOPIC_LIMIT 条才转人工，中间答上一条就重新计数 */
+{
+  eq(CFG.offtopicLimit, 3, 'test assumes the default limit');
+  mode = 'offtopic';
+  const chat = 'c4d@s.whatsapp.net', io = makeIo();
+  for (let i = 1; i < CFG.offtopicLimit; i++) {
+    await handleIncoming({ id: `4d-${i}`, chat, from: chat, body: `chat ${i}` }, io);
+    eq(pauseUntil(chat), 0, `off-topic message ${i} must not silence the chat`);
+  }
+  eq(io.sent.length, CFG.offtopicLimit - 1, 'every off-topic message gets its own nudge');
+
+  mode = 'ok';                                          // 中间来了个正经问题 → 计数清零
+  await handleIncoming({ id: '4d-ok', chat, from: chat, body: 'Q-real' }, io);
+  eq(pauseUntil(chat), 0, 'an answered question must not silence the chat');
+
+  mode = 'offtopic';
+  for (let i = 1; i < CFG.offtopicLimit; i++) {         // 少一条就不该转：证明上一步真的清零了
+    await handleIncoming({ id: `4d-again-${i}`, chat, from: chat, body: `chat again ${i}` }, io);
+  }
+  eq(pauseUntil(chat), 0, 'an answered question resets the run');
+  await handleIncoming({ id: '4d-last', chat, from: chat, body: 'chat again last' }, io);
+  ok(pauseUntil(chat) > Date.now(), 'the limit-th off-topic message in a row hands over');
+  eq(io.sent.at(-1), CFG.handoffText, 'handover text is the last thing sent');
+  ok(!io.sent.some(t => t.includes(OFFTOPIC_MARK)), 'the marker must never reach the customer');
+
+  resume(chat);
+  mode = 'ok';
 }
 
 /* 5) 转人工：话术发成功才静默；发失败不能把客户晾着 */

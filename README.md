@@ -101,6 +101,7 @@ schtasks /create /tn WhatsAppBot /tr "cmd /c cd /d C:\whatsapp-ai-cs && npm star
 | `WHATSAPP_PHONE` | recommended | Your number, country code first, no `+` (e.g. `447700900123`). Enables pairing-code login. |
 | `PAUSE_KEYWORD` | | Phrases that mean "I want a person", comma-separated, case-insensitive |
 | `PAUSE_HOURS` | | Hours the bot stays quiet after a handoff. Default 12 |
+| `OFFTOPIC_LIMIT` | | Off-topic messages in a row before the chat goes to a human. Default 3 |
 | `HISTORY_TURNS` | | Recent messages sent to the model. Default 12 (a question and an answer count as 2) |
 | `LLM_TIMEOUT_MS` | | Model timeout in milliseconds. Default 30000. A timeout counts as "can't answer". |
 | `REPLY_GROUPS` | | `true` to also reply in group chats. Default `false` |
@@ -116,6 +117,7 @@ Everything the bot says comes from `SYSTEM_PROMPT`. Two rules:
 
 - **Only state facts you are sure of.** Anything not in the prompt (prices, stock, return periods, delivery to a specific postcode), the bot is told to hand off rather than guess.
 - **Keep the `[[HANDOFF]]` instruction.** When the model can't answer, it ends its reply with this marker, and that is what actually hands the chat to a human. The marker is never shown to the customer. Without it, the model might write "let me transfer you" but nobody would be told.
+- **`[[OFFTOPIC]]` is the other marker, and it is optional.** Use it for messages that are nothing to do with the business (the weather, the date, small talk): the model answers with a short nudge and the chat stays with the bot, so one stray message does not silence a customer for 12 hours. Only after `OFFTOPIC_LIMIT` of them in a row does the chat go to a human. Any answered question resets the count. Leave the marker out of the prompt and off-topic messages are simply answered like anything else.
 
 ### Handoff phrases
 
