@@ -325,6 +325,7 @@ async function loadSettings() {
   if (!c) return note('errmsg', t('offline'));
   for (const [k, v] of Object.entries(c)) {
     const input = form.elements[k];
+    if (!input) continue;                       // 设置表单里没有的字段（WHATSAPP_PHONE 在「关联」页）
     if (k === 'OPENAI_API_KEY') { input.value = ''; keyMasked = v.set ? v.masked : ''; }
     else if (k === 'PAUSE_KEYWORD') input.value = v.join('\n');
     else if (input.type === 'checkbox') input.checked = v;

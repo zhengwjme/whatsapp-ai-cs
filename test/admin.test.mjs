@@ -2,7 +2,7 @@
  * 管理服务 HTTP API：随机端口起服务、注入假连接适配器，用 fetch 调真实接口。数据落在 data/test-admin
  * 覆盖：只绑本机 · 连接状态透传 · 会话列表与客户昵称 · 旧库升级 · 历史分页与三方角色 · 手动转人工与恢复接待 · 运营发送 · 配置读写 · 网页登录与重新关联 · 未知 API · 端口占用
  */
-import { createServer } from 'node:http';
+import { createServer, request } from 'node:http';
 import { rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { parseEnv } from 'node:util';
 import { DatabaseSync } from 'node:sqlite';
@@ -377,6 +377,18 @@ saveMsg(a, 'assistant', 'x'.repeat(500));
   eq(r.status, 200);
   ok(r.headers.get('content-type').startsWith('text/html'));
   ok((await r.text()).includes('<html'), 'serves the page');
+}
+
+/* 跨源与改写 Host 的请求要挡掉：运营浏览器里的别的网页不能借本机地址改配置、发消息 */
+{
+  const r = await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { origin: 'http://evil.example' } });
+  eq(r.status, 403, 'cross-origin request rejected');
+  const h = await new Promise(done => {                         // fetch 不让改 Host，用原始请求
+    request({ host: '127.0.0.1', port, path: '/api/config', headers: { Host: 'evil.example' } }, done).end();
+  });
+  eq(h.statusCode, 403, 'rebound host rejected');
+  const ok200 = await fetch(`http://127.0.0.1:${port}/api/config`, { headers: { origin: `http://localhost:${port}` } });
+  eq(ok200.status, 200, 'same-origin request still works');
 }
 
 /* 端口被占用：启动失败要抛出，交给调用方提示 */

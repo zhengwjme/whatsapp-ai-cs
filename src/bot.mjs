@@ -4,7 +4,7 @@
  * 装依赖：npm install
  * 登录并启动：npm start        （首次终端出二维码，或用 WHATSAPP_PHONE 要配对码）
  */
-import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from 'baileys';
+import makeWASocket, { useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion, fetchLatestBaileysVersion } from 'baileys';
 import qrcode from 'qrcode-terminal';
 import { join } from 'node:path';
 import { rmSync } from 'node:fs';
@@ -18,6 +18,7 @@ let pairingRequested = false;
 let conn = { state: 'connecting' };   // 连接适配器的当前状态：connecting | open | qr（附 qr 原始串）| loggedOut
 let current;                          // 当前这条连接的 socket：重连后换新，管理界面发消息、申请配对码用它
 let retry;                            // 断线重连的定时器：重新关联时要取消，免得起两条连接
+let starting;                         // 进行中的 start()：重新关联要先等它收尾，否则它会把旧凭据写回刚删的目录
 let relinking;                        // 进行中的重新关联：连点两次只跑一次，否则会起两条连接、重复回复客户
 
 // 静音 Baileys 的内置 pino 日志，终端只留我们自己的输出（老 Windows 控制台更友好）
@@ -25,7 +26,9 @@ const quiet = new Proxy({}, { get: () => () => quiet });
 
 async function start() {
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-  const { version } = await fetchLatestBaileysVersion();
+  // 实时问 web.whatsapp.com 要版本号：Baileys 内置/自带接口返回的那个已被服务端淘汰，
+  // 二维码照出，扫完却关联不上（WhiskeySockets/Baileys#2679）。取不到再退回内置的
+  const { version } = await fetchLatestWaWebVersion().catch(() => fetchLatestBaileysVersion());
   const sock = makeWASocket({
     version, auth: state, printQRInTerminal: false, markOnlineOnConnect: false, logger: quiet,
   });
@@ -54,7 +57,7 @@ async function start() {
       const loggedOut = lastDisconnect?.error?.output?.statusCode === DisconnectReason.loggedOut;
       conn = { state: loggedOut ? 'loggedOut' : 'connecting' };
       console.log(loggedOut ? 'Logged out. Click "Log out and relink" on the admin page, or delete data/baileys-auth and restart' : 'Connection lost, reconnecting in 5 seconds…');
-      if (!loggedOut) retry = setTimeout(start, 5000);
+      if (!loggedOut) reconnect();
     }
   });
 
@@ -75,7 +78,17 @@ async function start() {
   });
 }
 
-start().catch(e => { console.error('Failed to start:', e); process.exit(1); });
+/** 记下在途的 start()，好让重新关联等它收尾 */
+function boot() {
+  return (starting = start().finally(() => { starting = undefined; }));
+}
+
+/** 5 秒后重连；这时多半正断网，start() 里取 WA Web 版本号会失败，接住并继续重试 */
+function reconnect() {
+  retry = setTimeout(() => boot().catch(e => { console.error('Reconnect failed:', e.message); reconnect(); }), 5000);
+}
+
+boot().catch(e => { console.error('Failed to start:', e); process.exit(1); });
 
 const adapter = {
   status: () => conn,
@@ -87,15 +100,19 @@ const adapter = {
 /** 退出并重新关联：旧连接的事件一律不再处理（否则关闭会被当成登出/断线，creds 还会写回刚删的目录）→ 登出 → 清登录态 → 重连 */
 async function relink() {
   clearTimeout(retry);
-  const old = current;
-  for (const e of ['connection.update', 'creds.update', 'messages.upsert']) old.ev.removeAllListeners(e);
-  await old.logout().catch(() => {});   // 让手机端移除本设备；已登出/未登录时会失败，无所谓
-  await old.end(undefined);
+  await starting?.catch(() => {});      // 等在途的连接建完：否则它随后会把旧凭据写回刚删的目录，还留下第二条连接
+  clearTimeout(retry);                  // 等待期间它失败了、或旧连接断了，都会再排一个重连定时器，一并取消
+  const old = current;                // 首次连接还没建起来（或刚失败）时没有 socket 要拆
+  if (old) {
+    for (const e of ['connection.update', 'creds.update', 'messages.upsert']) old.ev.removeAllListeners(e);
+    await old.logout().catch(() => {});   // 让手机端移除本设备；已登出/未登录时会失败，无所谓
+    await old.end(undefined);
+  }
   rmSync(AUTH_DIR, { recursive: true, force: true });
   pairingRequested = false;
   conn = { state: 'connecting' };
   console.log('Relinking: logged out, waiting for a new login');
-  await start();
+  await boot().catch(e => { reconnect(); throw e; });   // 这里失败登录态已删，不排重试就再也起不来了
 }
 
 // 管理界面起不来不影响机器人收发消息

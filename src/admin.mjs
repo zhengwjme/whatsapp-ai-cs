@@ -37,7 +37,17 @@ function qrSvg(text) {
  * @returns {Promise<import('node:http').Server>} 监听失败（如端口被占用）时 reject
  */
 export function startAdmin({ port, conn, envFile }) {
+  // 只监听本机不等于只有本人能访问：运营浏览器里的任何网页都能跨源 POST 进来（改模型地址、偷 API key、
+  // 冒充本号发消息），DNS rebinding 还能绕开 IP 限制。挡住非本机来源的 Origin 与被改写的 Host
+  const local = host => {                                 // port 为 0 时真实端口要等监听后才知道；80 端口浏览器不带端口号
+    const m = /^(?:127\.0\.0\.1|localhost)(?::(\d+))?$/.exec(host || '');
+    return !!m && +(m[1] ?? 80) === server.address()?.port;
+  };
   const server = createServer(async (req, res) => {
+    const origin = req.headers.origin;
+    if (!local(req.headers.host) || (origin && !local(origin.replace(/^http:\/\//, '')))) {
+      return res.writeHead(403, { 'Content-Type': 'text/plain' }).end('forbidden');
+    }
     const url = new URL(req.url, 'http://localhost');
     if (!url.pathname.startsWith('/api/')) return res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }).end(PAGE);
     const json = (status, body) => res.writeHead(status, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
